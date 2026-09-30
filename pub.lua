@@ -6,9 +6,142 @@ local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 local GuiService = game:GetService("GuiService")
 local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
 local Workspace = game:GetService("Workspace")
 local LP = Players.LocalPlayer
 local Env = getgenv and getgenv() or _G
+local PLAZA_SERVER_FILE = "PLAZASERVERS.json"
+local PLAZA_SERVER_BLOCK_SECONDS = 10 * 60
+local PlazaServerHistory = {servers = {}}
+
+local function SavePlazaServerHistory()
+    if type(writefile) ~= "function" then
+        return false
+    end
+    local Success,Encoded = pcall(function()
+        return HttpService:JSONEncode(PlazaServerHistory)
+    end)
+    if not Success then
+        return false
+    end
+    return pcall(function()
+        writefile(PLAZA_SERVER_FILE,Encoded)
+    end)
+end
+
+local function PrunePlazaServerHistory()
+    if type(PlazaServerHistory) ~= "table" then
+        PlazaServerHistory = {servers = {}}
+    end
+    if type(PlazaServerHistory.servers) ~= "table" then
+        PlazaServerHistory.servers = {}
+    end
+
+    local Now = os.time()
+    local Changed = false
+    for JobId,Entry in pairs(PlazaServerHistory.servers) do
+        local Timestamp = type(Entry) == "table"
+            and tonumber(Entry.timestamp)
+            or tonumber(Entry)
+        local ExpiresAt = type(Entry) == "table"
+            and tonumber(Entry.expiresAt)
+            or (Timestamp and (Timestamp + PLAZA_SERVER_BLOCK_SECONDS))
+
+        if not Timestamp
+        or not ExpiresAt
+        or Now >= ExpiresAt then
+            PlazaServerHistory.servers[JobId] = nil
+            Changed = true
+        end
+    end
+
+    if Changed then
+        SavePlazaServerHistory()
+    end
+end
+
+local function LoadPlazaServerHistory()
+    PlazaServerHistory = {servers = {}}
+
+    if type(isfile) == "function"
+    and type(readfile) == "function" then
+        local ExistsSuccess,Exists = pcall(function()
+            return isfile(PLAZA_SERVER_FILE)
+        end)
+        if ExistsSuccess and Exists then
+            local ReadSuccess,Contents = pcall(function()
+                return readfile(PLAZA_SERVER_FILE)
+            end)
+            if ReadSuccess
+            and type(Contents) == "string"
+            and Contents ~= "" then
+                local DecodeSuccess,Data = pcall(function()
+                    return HttpService:JSONDecode(Contents)
+                end)
+                if DecodeSuccess
+                and type(Data) == "table"
+                and type(Data.servers) == "table" then
+                    PlazaServerHistory = Data
+                end
+            end
+        end
+    end
+
+    PrunePlazaServerHistory()
+    SavePlazaServerHistory()
+end
+
+local function MarkPlazaServerVisited(JobId,PlaceId)
+    if not JobId or JobId == "" then
+        return
+    end
+
+    local Now = os.time()
+    PlazaServerHistory.servers[tostring(JobId)] = {
+        jobId = tostring(JobId),
+        placeId = tonumber(PlaceId) or game.PlaceId,
+        timestamp = Now,
+        expiresAt = Now + PLAZA_SERVER_BLOCK_SECONDS
+    }
+    SavePlazaServerHistory()
+end
+
+local function IsPlazaServerBlocked(JobId)
+    if not JobId or JobId == "" then
+        return false
+    end
+
+    PrunePlazaServerHistory()
+    local Entry = PlazaServerHistory.servers[tostring(JobId)]
+    if not Entry then
+        return false
+    end
+
+    local Timestamp = type(Entry) == "table"
+        and tonumber(Entry.timestamp)
+        or tonumber(Entry)
+    local ExpiresAt = type(Entry) == "table"
+        and tonumber(Entry.expiresAt)
+        or (Timestamp and (Timestamp + PLAZA_SERVER_BLOCK_SECONDS))
+
+    return ExpiresAt ~= nil and os.time() < ExpiresAt
+end
+
+LoadPlazaServerHistory()
+MarkPlazaServerVisited(game.JobId,game.PlaceId)
+
+Env.WuzzPlazaServers = {
+    File = PLAZA_SERVER_FILE,
+    BlockSeconds = PLAZA_SERVER_BLOCK_SECONDS,
+    MarkVisited = MarkPlazaServerVisited,
+    IsBlocked = IsPlazaServerBlocked,
+    Prune = PrunePlazaServerHistory,
+    GetHistory = function()
+        PrunePlazaServerHistory()
+        return PlazaServerHistory
+    end
+}
+
 if Env.WuzzConvincerCleanup then
     pcall(Env.WuzzConvincerCleanup)
 end
@@ -72,6 +205,45 @@ pcall(function()
         end
     end
 end)
+local GuiLocked = SavedGuiPositions.GuiLocked == true
+local GuiScale = math.clamp(tonumber(SavedGuiPositions.GuiScale) or 1,0.60,1.50)
+
+local function EnsureGlobalGuiScale(Object)
+    if not Object
+    or not Object:IsA("GuiObject")
+    or Object.Parent ~= Gui then
+        return
+    end
+
+    local Scale = Object:FindFirstChild("WuzzGlobalScale")
+    if not Scale then
+        Scale = Instance.new("UIScale")
+        Scale.Name = "WuzzGlobalScale"
+        Scale.Parent = Object
+    end
+    Scale.Scale = GuiScale
+end
+
+local function SetGlobalGuiScale(Value,ShouldSave)
+    GuiScale = math.clamp(tonumber(Value) or GuiScale,0.60,1.50)
+    for _,Object in ipairs(Gui:GetChildren()) do
+        if Object:IsA("GuiObject") then
+            EnsureGlobalGuiScale(Object)
+        end
+    end
+    if ShouldSave ~= false and SaveGuiPositions then
+        pcall(SaveGuiPositions)
+    end
+end
+
+Connect(Gui.ChildAdded,function(Object)
+    task.defer(function()
+        if Object and Object.Parent == Gui and Object:IsA("GuiObject") then
+            EnsureGlobalGuiScale(Object)
+        end
+    end)
+end)
+
 local function SavedPosition(Key,Default)
     local Data = SavedGuiPositions[Key]
     if type(Data) == "table"
@@ -100,6 +272,8 @@ Main.ClipsDescendants = true
 Main.Active = true
 Main.Parent = Gui
 SaveGuiPositions = function()
+    SavedGuiPositions.GuiScale = GuiScale
+    SavedGuiPositions.GuiLocked = GuiLocked
     SavedGuiPositions.Main = PackPosition(Main.Position)
     if BaseViewerFrame and BaseViewerFrame.Parent then
         SavedGuiPositions.BaseViewer = PackPosition(BaseViewerFrame.Position)
@@ -119,6 +293,505 @@ SaveGuiPositions = function()
         end)
     end
 end
+
+local TopBar = Instance.new("Frame")
+TopBar.Name = "WuzzTopBar"
+TopBar.AnchorPoint = Vector2.new(0.5,0)
+TopBar.Size = UDim2.fromOffset(610,54)
+TopBar.Position = UDim2.new(0.5,0,0,14)
+TopBar.BackgroundColor3 = Color3.fromRGB(11,7,18)
+TopBar.BorderSizePixel = 0
+TopBar.ClipsDescendants = false
+TopBar.Active = true
+TopBar.ZIndex = 100
+TopBar.Parent = Gui
+
+local TopBarCorner = Instance.new("UICorner")
+TopBarCorner.CornerRadius = UDim.new(0,18)
+TopBarCorner.Parent = TopBar
+
+local TopBarStroke = Instance.new("UIStroke")
+TopBarStroke.Thickness = 2
+TopBarStroke.Color = Color3.fromRGB(190,80,255)
+TopBarStroke.Transparency = 0.04
+TopBarStroke.Parent = TopBar
+
+local TopBarStrokeGradient = Instance.new("UIGradient")
+TopBarStrokeGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(92,30,190)),
+    ColorSequenceKeypoint.new(0.25,Color3.fromRGB(230,100,255)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(130,45,245)),
+    ColorSequenceKeypoint.new(0.75,Color3.fromRGB(240,125,255)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(92,30,190))
+})
+TopBarStrokeGradient.Parent = TopBarStroke
+
+local TopBarGradient = Instance.new("UIGradient")
+TopBarGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(31,12,49)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(12,7,20)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(34,11,52))
+})
+TopBarGradient.Rotation = 16
+TopBarGradient.Parent = TopBar
+
+local TopParticles = Instance.new("Frame")
+TopParticles.Name = "Particles"
+TopParticles.Size = UDim2.fromScale(1,1)
+TopParticles.BackgroundTransparency = 1
+TopParticles.ClipsDescendants = true
+TopParticles.ZIndex = 101
+TopParticles.Parent = TopBar
+
+for i = 1,11 do
+    local P = Instance.new("Frame")
+    local S = math.random(2,4)
+    P.Size = UDim2.fromOffset(S,S)
+    P.Position = UDim2.new(math.random(),0,math.random(),0)
+    P.BackgroundColor3 = Color3.fromRGB(
+        math.random(150,215),
+        math.random(55,115),
+        255
+    )
+    P.BackgroundTransparency = 0.46
+    P.BorderSizePixel = 0
+    P.ZIndex = 101
+    P.Parent = TopParticles
+
+    local PCorner = Instance.new("UICorner")
+    PCorner.CornerRadius = UDim.new(1,0)
+    PCorner.Parent = P
+
+    task.spawn(function()
+        while Gui and Gui.Parent and P.Parent do
+            P.Position = UDim2.new(-0.03,0,math.random(),0)
+            P.BackgroundTransparency = 0.48
+            local T = TweenService:Create(
+                P,
+                TweenInfo.new(math.random(5,9),Enum.EasingStyle.Linear),
+                {
+                    Position = UDim2.new(1.03,0,math.random(),0),
+                    BackgroundTransparency = 1
+                }
+            )
+            T:Play()
+            T.Completed:Wait()
+        end
+    end)
+end
+
+local TopLogo = Instance.new("Frame")
+TopLogo.Size = UDim2.fromOffset(36,36)
+TopLogo.Position = UDim2.fromOffset(10,9)
+TopLogo.BackgroundColor3 = Color3.fromRGB(80,29,128)
+TopLogo.BorderSizePixel = 0
+TopLogo.ZIndex = 104
+TopLogo.Parent = TopBar
+
+local TopLogoCorner = Instance.new("UICorner")
+TopLogoCorner.CornerRadius = UDim.new(0,11)
+TopLogoCorner.Parent = TopLogo
+
+local TopLogoStroke = Instance.new("UIStroke")
+TopLogoStroke.Thickness = 1.5
+TopLogoStroke.Color = Color3.fromRGB(205,98,255)
+TopLogoStroke.Transparency = 0.08
+TopLogoStroke.Parent = TopLogo
+
+local TopLogoText = Instance.new("TextLabel")
+TopLogoText.Size = UDim2.fromScale(1,1)
+TopLogoText.BackgroundTransparency = 1
+TopLogoText.Text = "W"
+TopLogoText.TextColor3 = Color3.fromRGB(246,205,255)
+TopLogoText.Font = Enum.Font.GothamBlack
+TopLogoText.TextSize = 19
+TopLogoText.ZIndex = 105
+TopLogoText.Parent = TopLogo
+
+local TopTitle = Instance.new("TextLabel")
+TopTitle.Size = UDim2.fromOffset(248,32)
+TopTitle.Position = UDim2.fromOffset(57,11)
+TopTitle.BackgroundTransparency = 1
+TopTitle.Text = "Wuzz Pub Method"
+TopTitle.TextColor3 = Color3.fromRGB(255,255,255)
+TopTitle.Font = Enum.Font.GothamBold
+TopTitle.TextSize = 17
+TopTitle.TextXAlignment = Enum.TextXAlignment.Left
+TopTitle.ZIndex = 104
+TopTitle.Parent = TopBar
+
+local TopTitleGradient = Instance.new("UIGradient")
+TopTitleGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(150,72,255)),
+    ColorSequenceKeypoint.new(0.32,Color3.fromRGB(240,160,255)),
+    ColorSequenceKeypoint.new(0.66,Color3.fromRGB(188,80,255)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(112,42,230))
+})
+TopTitleGradient.Rotation = 0
+TopTitleGradient.Parent = TopTitle
+
+local PerfText = Instance.new("TextLabel")
+PerfText.Size = UDim2.fromOffset(200,30)
+PerfText.Position = UDim2.new(1,-258,0,12)
+PerfText.BackgroundTransparency = 1
+PerfText.Text = "-- FPS  •  -- ms"
+PerfText.TextColor3 = Color3.fromRGB(193,171,211)
+PerfText.Font = Enum.Font.GothamMedium
+PerfText.TextSize = 11
+PerfText.TextXAlignment = Enum.TextXAlignment.Right
+PerfText.ZIndex = 104
+PerfText.Parent = TopBar
+
+local Gear = Instance.new("TextButton")
+Gear.Name = "Settings"
+Gear.Size = UDim2.fromOffset(38,38)
+Gear.Position = UDim2.new(1,-47,0,8)
+Gear.BackgroundColor3 = Color3.fromRGB(47,24,67)
+Gear.BorderSizePixel = 0
+Gear.Text = "⚙"
+Gear.TextColor3 = Color3.fromRGB(232,183,255)
+Gear.Font = Enum.Font.GothamBold
+Gear.TextSize = 20
+Gear.AutoButtonColor = false
+Gear.ZIndex = 106
+Gear.Parent = TopBar
+
+local GearCorner = Instance.new("UICorner")
+GearCorner.CornerRadius = UDim.new(0,11)
+GearCorner.Parent = Gear
+
+local GearStroke = Instance.new("UIStroke")
+GearStroke.Color = Color3.fromRGB(161,72,225)
+GearStroke.Transparency = 0.2
+GearStroke.Parent = Gear
+
+local SettingsPanel = Instance.new("Frame")
+SettingsPanel.Name = "SettingsDropdown"
+SettingsPanel.Size = UDim2.fromOffset(610,0)
+SettingsPanel.Position = UDim2.fromOffset(0,62)
+SettingsPanel.BackgroundColor3 = Color3.fromRGB(12,8,20)
+SettingsPanel.BackgroundTransparency = 1
+SettingsPanel.BorderSizePixel = 0
+SettingsPanel.ClipsDescendants = true
+SettingsPanel.ZIndex = 98
+SettingsPanel.Parent = TopBar
+
+local SettingsCorner = Instance.new("UICorner")
+SettingsCorner.CornerRadius = UDim.new(0,16)
+SettingsCorner.Parent = SettingsPanel
+
+local SettingsStroke = Instance.new("UIStroke")
+SettingsStroke.Thickness = 1.5
+SettingsStroke.Color = Color3.fromRGB(170,72,240)
+SettingsStroke.Transparency = 1
+SettingsStroke.Parent = SettingsPanel
+
+local SettingsStrokeGradient = Instance.new("UIGradient")
+SettingsStrokeGradient.Color = TopBarStrokeGradient.Color
+SettingsStrokeGradient.Parent = SettingsStroke
+
+local SettingsHeader = Instance.new("TextLabel")
+SettingsHeader.Size = UDim2.fromOffset(96,18)
+SettingsHeader.Position = UDim2.fromOffset(16,12)
+SettingsHeader.BackgroundTransparency = 1
+SettingsHeader.Text = "GUI SCALE"
+SettingsHeader.TextColor3 = Color3.fromRGB(198,166,220)
+SettingsHeader.Font = Enum.Font.GothamBold
+SettingsHeader.TextSize = 10
+SettingsHeader.TextXAlignment = Enum.TextXAlignment.Left
+SettingsHeader.ZIndex = 101
+SettingsHeader.Parent = SettingsPanel
+
+local ScaleBox = Instance.new("TextBox")
+ScaleBox.Size = UDim2.fromOffset(70,30)
+ScaleBox.Position = UDim2.fromOffset(16,34)
+ScaleBox.BackgroundColor3 = Color3.fromRGB(29,17,42)
+ScaleBox.BorderSizePixel = 0
+ScaleBox.ClearTextOnFocus = false
+ScaleBox.Text = tostring(math.floor(GuiScale*100+0.5)).."%"
+ScaleBox.TextColor3 = Color3.fromRGB(247,234,255)
+ScaleBox.PlaceholderText = "100%"
+ScaleBox.Font = Enum.Font.GothamBold
+ScaleBox.TextSize = 11
+ScaleBox.ZIndex = 101
+ScaleBox.Parent = SettingsPanel
+
+local ScaleBoxCorner = Instance.new("UICorner")
+ScaleBoxCorner.CornerRadius = UDim.new(0,9)
+ScaleBoxCorner.Parent = ScaleBox
+
+local ScaleBoxStroke = Instance.new("UIStroke")
+ScaleBoxStroke.Color = Color3.fromRGB(131,56,197)
+ScaleBoxStroke.Transparency = 0.28
+ScaleBoxStroke.Parent = ScaleBox
+
+local SliderTrack = Instance.new("Frame")
+SliderTrack.Size = UDim2.fromOffset(330,7)
+SliderTrack.Position = UDim2.fromOffset(102,46)
+SliderTrack.BackgroundColor3 = Color3.fromRGB(47,29,63)
+SliderTrack.BorderSizePixel = 0
+SliderTrack.ZIndex = 101
+SliderTrack.Parent = SettingsPanel
+
+local SliderCorner = Instance.new("UICorner")
+SliderCorner.CornerRadius = UDim.new(1,0)
+SliderCorner.Parent = SliderTrack
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new(0,0,1,0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(177,77,255)
+SliderFill.BorderSizePixel = 0
+SliderFill.ZIndex = 102
+SliderFill.Parent = SliderTrack
+
+local SliderFillCorner = Instance.new("UICorner")
+SliderFillCorner.CornerRadius = UDim.new(1,0)
+SliderFillCorner.Parent = SliderFill
+
+local SliderFillGradient = Instance.new("UIGradient")
+SliderFillGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(117,46,215)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(228,112,255))
+})
+SliderFillGradient.Parent = SliderFill
+
+local SliderKnob = Instance.new("Frame")
+SliderKnob.AnchorPoint = Vector2.new(0.5,0.5)
+SliderKnob.Size = UDim2.fromOffset(17,17)
+SliderKnob.Position = UDim2.new(0,0,0.5,0)
+SliderKnob.BackgroundColor3 = Color3.fromRGB(235,177,255)
+SliderKnob.BorderSizePixel = 0
+SliderKnob.ZIndex = 103
+SliderKnob.Parent = SliderTrack
+
+local SliderKnobCorner = Instance.new("UICorner")
+SliderKnobCorner.CornerRadius = UDim.new(1,0)
+SliderKnobCorner.Parent = SliderKnob
+
+local SliderKnobStroke = Instance.new("UIStroke")
+SliderKnobStroke.Color = Color3.fromRGB(153,61,229)
+SliderKnobStroke.Transparency = 0.05
+SliderKnobStroke.Parent = SliderKnob
+
+local LockButton = Instance.new("TextButton")
+LockButton.Size = UDim2.fromOffset(145,34)
+LockButton.Position = UDim2.new(1,-161,0,31)
+LockButton.BackgroundColor3 = Color3.fromRGB(74,31,112)
+LockButton.BorderSizePixel = 0
+LockButton.TextColor3 = Color3.fromRGB(255,242,255)
+LockButton.Font = Enum.Font.GothamBold
+LockButton.TextSize = 10
+LockButton.AutoButtonColor = false
+LockButton.ZIndex = 102
+LockButton.Parent = SettingsPanel
+
+local LockCorner = Instance.new("UICorner")
+LockCorner.CornerRadius = UDim.new(0,10)
+LockCorner.Parent = LockButton
+
+local LockStroke = Instance.new("UIStroke")
+LockStroke.Color = Color3.fromRGB(185,89,248)
+LockStroke.Transparency = 0.25
+LockStroke.Parent = LockButton
+
+local SettingsHint = Instance.new("TextLabel")
+SettingsHint.Size = UDim2.new(1,-32,0,20)
+SettingsHint.Position = UDim2.fromOffset(16,73)
+SettingsHint.BackgroundTransparency = 1
+SettingsHint.Text = "Scale range 60% - 150%   •   Lock prevents GUI windows from being dragged"
+SettingsHint.TextColor3 = Color3.fromRGB(132,112,148)
+SettingsHint.Font = Enum.Font.GothamMedium
+SettingsHint.TextSize = 9
+SettingsHint.TextXAlignment = Enum.TextXAlignment.Left
+SettingsHint.ZIndex = 101
+SettingsHint.Parent = SettingsPanel
+
+local SCALE_MIN = 0.60
+local SCALE_MAX = 1.50
+local SettingsOpen = false
+local SliderDragging = false
+
+local function RefreshScaleControls()
+    local Alpha = math.clamp((GuiScale-SCALE_MIN)/(SCALE_MAX-SCALE_MIN),0,1)
+    SliderFill.Size = UDim2.new(Alpha,0,1,0)
+    SliderKnob.Position = UDim2.new(Alpha,0,0.5,0)
+    ScaleBox.Text = tostring(math.floor(GuiScale*100+0.5)).."%"
+end
+
+local function RefreshLockButton()
+    if GuiLocked then
+        LockButton.Text = "GUI LOCK  •  ON"
+        LockButton.BackgroundColor3 = Color3.fromRGB(132,49,205)
+        LockStroke.Transparency = 0.04
+    else
+        LockButton.Text = "GUI LOCK  •  OFF"
+        LockButton.BackgroundColor3 = Color3.fromRGB(74,31,112)
+        LockStroke.Transparency = 0.25
+    end
+end
+
+local function ApplyScaleFromAlpha(Alpha,ShouldSave)
+    Alpha = math.clamp(Alpha,0,1)
+    SetGlobalGuiScale(SCALE_MIN+(SCALE_MAX-SCALE_MIN)*Alpha,ShouldSave)
+    RefreshScaleControls()
+end
+
+local function ApplyScaleText()
+    local Raw = tostring(ScaleBox.Text or "")
+    local HasPercent = string.find(Raw,"%%",1,false) ~= nil
+    local Number = tonumber((Raw:gsub("[^%d%.%-]","")))
+    if not Number then
+        RefreshScaleControls()
+        return
+    end
+    if HasPercent or math.abs(Number) > 3 then
+        Number = Number/100
+    end
+    SetGlobalGuiScale(Number,true)
+    RefreshScaleControls()
+end
+
+local function SetSettingsOpen(State)
+    SettingsOpen = State == true
+    local TargetSize = SettingsOpen
+        and UDim2.fromOffset(610,102)
+        or UDim2.fromOffset(610,0)
+    TweenService:Create(
+        SettingsPanel,
+        TweenInfo.new(0.24,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),
+        {
+            Size = TargetSize,
+            BackgroundTransparency = SettingsOpen and 0.03 or 1
+        }
+    ):Play()
+    TweenService:Create(
+        SettingsStroke,
+        TweenInfo.new(0.18),
+        {Transparency = SettingsOpen and 0.10 or 1}
+    ):Play()
+    TweenService:Create(
+        Gear,
+        TweenInfo.new(0.24,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),
+        {Rotation = SettingsOpen and 48 or 0}
+    ):Play()
+end
+
+Connect(Gear.MouseEnter,function()
+    TweenService:Create(Gear,TweenInfo.new(0.12),{
+        BackgroundColor3 = Color3.fromRGB(72,31,100)
+    }):Play()
+    TweenService:Create(GearStroke,TweenInfo.new(0.12),{
+        Transparency = 0.02
+    }):Play()
+end)
+
+Connect(Gear.MouseLeave,function()
+    TweenService:Create(Gear,TweenInfo.new(0.12),{
+        BackgroundColor3 = Color3.fromRGB(47,24,67)
+    }):Play()
+    TweenService:Create(GearStroke,TweenInfo.new(0.12),{
+        Transparency = 0.2
+    }):Play()
+end)
+
+Connect(Gear.MouseButton1Click,function()
+    SetSettingsOpen(not SettingsOpen)
+end)
+
+Connect(LockButton.MouseButton1Click,function()
+    GuiLocked = not GuiLocked
+    RefreshLockButton()
+    if SaveGuiPositions then
+        pcall(SaveGuiPositions)
+    end
+end)
+
+Connect(ScaleBox.FocusLost,function()
+    ApplyScaleText()
+end)
+
+Connect(SliderTrack.InputBegan,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        SliderDragging = true
+        local Alpha = (Input.Position.X-SliderTrack.AbsolutePosition.X)
+            / math.max(SliderTrack.AbsoluteSize.X,1)
+        ApplyScaleFromAlpha(Alpha,false)
+    end
+end)
+
+Connect(SliderKnob.InputBegan,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        SliderDragging = true
+    end
+end)
+
+Connect(UserInputService.InputChanged,function(Input)
+    if SliderDragging and (
+        Input.UserInputType == Enum.UserInputType.MouseMovement
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local Alpha = (Input.Position.X-SliderTrack.AbsolutePosition.X)
+            / math.max(SliderTrack.AbsoluteSize.X,1)
+        ApplyScaleFromAlpha(Alpha,false)
+    end
+end)
+
+Connect(UserInputService.InputEnded,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        if SliderDragging then
+            SliderDragging = false
+            if SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end
+    end
+end)
+
+local PerfFrames = 0
+local PerfLast = os.clock()
+local CurrentFPS = 0
+local CurrentPing = "--"
+
+Connect(RunService.RenderStepped,function()
+    PerfFrames += 1
+    local Now = os.clock()
+    local Delta = Now-PerfLast
+    if Delta >= 0.5 then
+        CurrentFPS = math.floor((PerfFrames/Delta)+0.5)
+        PerfFrames = 0
+        PerfLast = Now
+
+        pcall(function()
+            local Value = Stats.Network.ServerStatsItem["Data Ping"]:GetValueString()
+            local Number = tonumber(string.match(tostring(Value),"[%d%.]+"))
+            if Number then
+                CurrentPing = tostring(math.floor(Number+0.5))
+            end
+        end)
+
+        PerfText.Text = tostring(CurrentFPS).." FPS  •  "..tostring(CurrentPing).." ms"
+    end
+end)
+
+task.spawn(function()
+    while Gui and Gui.Parent and TopBar.Parent do
+        TopBarStrokeGradient.Rotation = (TopBarStrokeGradient.Rotation+3) % 360
+        SettingsStrokeGradient.Rotation = (SettingsStrokeGradient.Rotation+3) % 360
+        TopTitleGradient.Rotation = (TopTitleGradient.Rotation+2) % 360
+        local Pulse = (math.sin(os.clock()*3.0)+1)*0.5
+        TopBarStroke.Transparency = 0.02+Pulse*0.14
+        TopLogoStroke.Transparency = 0.04+Pulse*0.24
+        task.wait(0.06)
+    end
+end)
+
+RefreshScaleControls()
+RefreshLockButton()
+SetGlobalGuiScale(GuiScale,false)
+
 local MainCorner = Instance.new("UICorner")
 MainCorner.CornerRadius = UDim.new(0,16)
 MainCorner.Parent = Main
@@ -751,8 +1424,10 @@ local FrienderDragStart
 local FrienderStartPosition
 
 Connect(FrienderHeader.InputBegan,function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1
-    or Input.UserInputType == Enum.UserInputType.Touch then
+    if not GuiLocked and (
+        Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
         FrienderDragging = true
         FrienderDragStart = Input.Position
         FrienderStartPosition = FrienderFrame.Position
@@ -760,7 +1435,7 @@ Connect(FrienderHeader.InputBegan,function(Input)
 end)
 
 Connect(UserInputService.InputChanged,function(Input)
-    if FrienderDragging and (
+    if FrienderDragging and not GuiLocked and (
         Input.UserInputType == Enum.UserInputType.MouseMovement
         or Input.UserInputType == Enum.UserInputType.Touch
     ) then
@@ -1129,15 +1804,17 @@ local AutoMessageDragging = false
 local AutoMessageDragStart
 local AutoMessageStartPosition
 Connect(AutoMessageHeader.InputBegan,function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1
-    or Input.UserInputType == Enum.UserInputType.Touch then
+    if not GuiLocked and (
+        Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
         AutoMessageDragging = true
         AutoMessageDragStart = Input.Position
         AutoMessageStartPosition = AutoMessageFrame.Position
     end
 end)
 Connect(UserInputService.InputChanged,function(Input)
-    if AutoMessageDragging and (
+    if AutoMessageDragging and not GuiLocked and (
         Input.UserInputType == Enum.UserInputType.MouseMovement
         or Input.UserInputType == Enum.UserInputType.Touch
     ) then
@@ -1165,15 +1842,17 @@ local Dragging = false
 local DragStart
 local StartPosition
 Connect(Header.InputBegan,function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1
-    or Input.UserInputType == Enum.UserInputType.Touch then
+    if not GuiLocked and (
+        Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
         Dragging = true
         DragStart = Input.Position
         StartPosition = Main.Position
     end
 end)
 Connect(UserInputService.InputChanged,function(Input)
-    if Dragging and (
+    if Dragging and not GuiLocked and (
         Input.UserInputType == Enum.UserInputType.MouseMovement
         or Input.UserInputType == Enum.UserInputType.Touch
     ) then
@@ -2545,8 +3224,10 @@ local function EnsureLastTradeBaseViewer()
         end
     end)
     Connect(Header2.InputBegan,function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1
-        or Input.UserInputType == Enum.UserInputType.Touch then
+        if not GuiLocked and (
+            Input.UserInputType == Enum.UserInputType.MouseButton1
+            or Input.UserInputType == Enum.UserInputType.Touch
+        ) then
             BaseViewerWindowDragging = true
             BaseViewerWindowStart = Input.Position
             BaseViewerWindowPosition = BaseViewerFrame.Position
@@ -2588,7 +3269,7 @@ local function EnsureLastTradeBaseViewer()
                 BaseViewerZoom = math.clamp(BaseViewerZoom,0.2,5)
                 UpdateBaseViewerCamera()
             end
-        elseif BaseViewerWindowDragging and (
+        elseif BaseViewerWindowDragging and not GuiLocked and (
             Input.UserInputType == Enum.UserInputType.MouseMovement
             or Input.UserInputType == Enum.UserInputType.Touch
         ) then
