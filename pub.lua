@@ -2792,6 +2792,7 @@ local function TradeWithPlayer(Player,Button)
     end
     if Completed then
         SetSelectedTradePlayer(Player)
+        SetLastTradedBase(Player)
     end
     if Button.Parent then
         Button.Text = Completed and "✓" or "×"
@@ -2824,118 +2825,122 @@ local function CreateRow(Player)
         return
     end
     local Row = Instance.new("Frame")
-    Row.Size = UDim2.new(1,-4,0,62)
-    Row.BackgroundColor3 =
-        Color3.fromRGB(31,18,45)
+    Row.Name = tostring(Player.UserId)
+    Row.Size = UDim2.new(1,-4,0,68)
+    Row.BackgroundColor3 = Color3.fromRGB(31,18,45)
     Row.BackgroundTransparency = 0.08
     Row.BorderSizePixel = 0
     Row.ZIndex = 6
     Row.Parent = List
-    local RowCorner =
-        Instance.new("UICorner")
-    RowCorner.CornerRadius =
-        UDim.new(0,11)
+    local RowCorner = Instance.new("UICorner")
+    RowCorner.CornerRadius = UDim.new(0,11)
     RowCorner.Parent = Row
-    local RowStroke =
-        Instance.new("UIStroke")
-    RowStroke.Color =
-        Color3.fromRGB(125,52,188)
+    local RowStroke = Instance.new("UIStroke")
+    RowStroke.Color = Color3.fromRGB(125,52,188)
     RowStroke.Transparency = 0.3
     RowStroke.Parent = Row
-    local Avatar =
-        Instance.new("ImageLabel")
-    Avatar.Size =
-        UDim2.fromOffset(44,44)
-    Avatar.Position =
-        UDim2.fromOffset(9,9)
-    Avatar.BackgroundColor3 =
-        Color3.fromRGB(54,28,76)
+    local Avatar = Instance.new("ImageLabel")
+    Avatar.Name = "Avatar"
+    Avatar.Size = UDim2.fromOffset(48,48)
+    Avatar.Position = UDim2.fromOffset(9,10)
+    Avatar.BackgroundColor3 = Color3.fromRGB(54,28,76)
     Avatar.BorderSizePixel = 0
+    Avatar.ScaleType = Enum.ScaleType.Crop
     Avatar.ZIndex = 7
     Avatar.Parent = Row
-    local AvatarCorner =
-        Instance.new("UICorner")
-    AvatarCorner.CornerRadius =
-        UDim.new(1,0)
+    local AvatarCorner = Instance.new("UICorner")
+    AvatarCorner.CornerRadius = UDim.new(1,0)
     AvatarCorner.Parent = Avatar
-    local AvatarStroke =
-        Instance.new("UIStroke")
-    AvatarStroke.Color =
-        Color3.fromRGB(150,65,215)
+    local AvatarStroke = Instance.new("UIStroke")
+    AvatarStroke.Color = Color3.fromRGB(150,65,215)
     AvatarStroke.Transparency = 0.25
     AvatarStroke.Parent = Avatar
     task.spawn(function()
-        local Success,Image =
-            pcall(function()
-                return Players:GetUserThumbnailAsync(
-                    Player.UserId,
-                    Enum.ThumbnailType.HeadShot,
-                    Enum.ThumbnailSize.Size150x150
-                )
-            end)
-        if Success
-        and Avatar.Parent then
+        local Success,Image = pcall(function()
+            return Players:GetUserThumbnailAsync(
+                Player.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size150x150
+            )
+        end)
+        if Success and Avatar.Parent then
             Avatar.Image = Image
         end
     end)
-    local Username =
-        Instance.new("TextLabel")
-    Username.Size =
-        UDim2.new(1,-175,0,32)
-    Username.Position =
-        UDim2.fromOffset(63,15)
+    local Display = Instance.new("TextLabel")
+    Display.Name = "DisplayName"
+    Display.Size = UDim2.new(1,-232,0,22)
+    Display.Position = UDim2.fromOffset(66,12)
+    Display.BackgroundTransparency = 1
+    Display.Text = Player.DisplayName
+    Display.TextColor3 = Color3.fromRGB(246,235,255)
+    Display.Font = Enum.Font.GothamBold
+    Display.TextSize = 13
+    Display.TextXAlignment = Enum.TextXAlignment.Left
+    Display.TextTruncate = Enum.TextTruncate.AtEnd
+    Display.ZIndex = 7
+    Display.Parent = Row
+    local Username = Instance.new("TextLabel")
+    Username.Name = "Username"
+    Username.Size = UDim2.new(1,-232,0,18)
+    Username.Position = UDim2.fromOffset(66,36)
     Username.BackgroundTransparency = 1
-    Username.Text = Player.Name
-    Username.TextColor3 =
-        Color3.fromRGB(246,235,255)
-    Username.Font = Enum.Font.GothamSemibold
-    Username.TextSize = 13
-    Username.TextXAlignment =
-        Enum.TextXAlignment.Left
-    Username.TextTruncate =
-        Enum.TextTruncate.AtEnd
+    Username.Text = "@"..Player.Name
+    Username.TextColor3 = Color3.fromRGB(173,151,193)
+    Username.Font = Enum.Font.GothamMedium
+    Username.TextSize = 10
+    Username.TextXAlignment = Enum.TextXAlignment.Left
+    Username.TextTruncate = Enum.TextTruncate.AtEnd
     Username.ZIndex = 7
     Username.Parent = Row
-    local Trade =
-        Instance.new("TextButton")
-    Trade.Size =
-        UDim2.fromOffset(82,34)
-    Trade.Position =
-        UDim2.new(1,-90,0.5,-17)
-    Trade.BackgroundColor3 =
-        Color3.fromRGB(108,42,172)
+    local Base = Instance.new("TextButton")
+    Base.Name = "Base"
+    Base.Size = UDim2.fromOffset(58,34)
+    Base.Position = UDim2.new(1,-153,0.5,-17)
+    Base.BackgroundColor3 = Color3.fromRGB(69,36,98)
+    Base.BorderSizePixel = 0
+    Base.Text = "BASE"
+    Base.TextColor3 = Color3.fromRGB(245,226,255)
+    Base.Font = Enum.Font.GothamBold
+    Base.TextSize = 10
+    Base.AutoButtonColor = false
+    Base.ZIndex = 8
+    Base.Parent = Row
+    local BaseCorner = Instance.new("UICorner")
+    BaseCorner.CornerRadius = UDim.new(0,9)
+    BaseCorner.Parent = Base
+    local BaseStroke = Instance.new("UIStroke")
+    BaseStroke.Color = Color3.fromRGB(174,83,235)
+    BaseStroke.Transparency = 0.22
+    BaseStroke.Parent = Base
+    Connect(Base.MouseButton1Click,function()
+        SetLastTradedBase(Player)
+    end)
+    local Trade = Instance.new("TextButton")
+    Trade.Name = "Trade"
+    Trade.Size = UDim2.fromOffset(78,34)
+    Trade.Position = UDim2.new(1,-87,0.5,-17)
+    Trade.BackgroundColor3 = Color3.fromRGB(108,42,172)
     Trade.BorderSizePixel = 0
     Trade.Text = "TRADE"
-    Trade.TextColor3 =
-        Color3.fromRGB(255,245,255)
-    Trade.Font =
-        Enum.Font.GothamBold
+    Trade.TextColor3 = Color3.fromRGB(255,245,255)
+    Trade.Font = Enum.Font.GothamBold
     Trade.TextSize = 11
     Trade.AutoButtonColor = false
     Trade.ZIndex = 8
     Trade.Parent = Row
-    local TradeCorner =
-        Instance.new("UICorner")
-    TradeCorner.CornerRadius =
-        UDim.new(0,9)
+    local TradeCorner = Instance.new("UICorner")
+    TradeCorner.CornerRadius = UDim.new(0,9)
     TradeCorner.Parent = Trade
-    local TradeStroke =
-        Instance.new("UIStroke")
-    TradeStroke.Color =
-        Color3.fromRGB(200,100,255)
+    local TradeStroke = Instance.new("UIStroke")
+    TradeStroke.Color = Color3.fromRGB(200,100,255)
     TradeStroke.Transparency = 0.15
     TradeStroke.Parent = Trade
-    Connect(
-        Trade.MouseButton1Click,
-        function()
-            task.spawn(function()
-                TradeWithPlayer(
-                    Player,
-                    Trade
-                )
-            end)
-        end
-    )
+    Connect(Trade.MouseButton1Click,function()
+        task.spawn(function()
+            TradeWithPlayer(Player,Trade)
+        end)
+    end)
     Rows[Player.UserId] = Row
 end
 Env.WuzzCoreScanner = {
