@@ -159,6 +159,20 @@ local function Connect(signal, callback)
     table.insert(Connections, c)
     return c
 end
+
+-- Compatibility helper: a few executors expose task.spawn/task.delay but not task.defer.
+local function SafeDefer(Callback)
+    if task and type(task.defer) == "function" then
+        return task.defer(Callback)
+    end
+    if task and type(task.spawn) == "function" then
+        return task.spawn(function()
+            task.wait()
+            Callback()
+        end)
+    end
+    return coroutine.wrap(Callback)()
+end
 local function Cleanup()
     if SaveGuiPositions then
         pcall(SaveGuiPositions)
@@ -237,7 +251,7 @@ local function SetGlobalGuiScale(Value,ShouldSave)
 end
 
 Connect(Gui.ChildAdded,function(Object)
-    task.defer(function()
+    SafeDefer(function()
         if Object and Object.Parent == Gui and Object:IsA("GuiObject") then
             EnsureGlobalGuiScale(Object)
         end
@@ -4112,7 +4126,7 @@ task.spawn(function()
         task.wait(0.08)
     end
 end)
-task.defer(function()
+SafeDefer(function()
     local S = Env.WuzzCoreScanner
     if S and S.IsMenuOpen() then
         S.Schedule(0.18)
