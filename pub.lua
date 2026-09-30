@@ -1436,16 +1436,10 @@ local function RebuildBasePlayerMaps()
     BasePlayersByDisplay = {}
     local Added = {}
     local Source = {}
-    if #FetchedListPlayers > 0 then
-        for _,Player in ipairs(FetchedListPlayers) do
-            table.insert(Source,Player)
-        end
-    else
-        for _,Player in ipairs(Players:GetPlayers()) do
-            if Player ~= LP then
-                table.insert(Source,Player)
-            end
-        end
+    -- Base matching is intentionally limited to the players fetched by the scanner.
+    -- This keeps the base avatar/name labels in sync with the fetched player list.
+    for _,Player in ipairs(FetchedListPlayers) do
+        table.insert(Source,Player)
     end
     for _,Player in ipairs(Source) do
         if Player
@@ -1815,16 +1809,8 @@ local function UpdatePlotSignESP(PlotSign)
         end
         return
     end
-    local ExpiresAt = SelectedTradePlayersUntil[MatchedPlayer.UserId]
-    if not ExpiresAt or ExpiresAt <= os.clock() then
-        if ExpiresAt then
-            SelectedTradePlayersUntil[MatchedPlayer.UserId] = nil
-        end
-        if Data then
-            RemovePlotBaseESP(PlotSign)
-        end
-        return
-    end
+    -- MatchedPlayer already comes from the fetched player list maps, so every
+    -- fetched player gets the same avatar/name base label without needing a trade.
     if not Data
     or Data.SourceLabel ~= SourceLabel
     or Data.MatchedPlayer ~= MatchedPlayer
@@ -2916,6 +2902,10 @@ local function CreateRow(Player)
     BaseStroke.Transparency = 0.22
     BaseStroke.Parent = Base
     Connect(Base.MouseButton1Click,function()
+        -- Refresh/scan first so BASE resolves through the exact same matched-plot
+        -- path used after a successful trade, without actually sending a trade.
+        RefreshBasePlayerList()
+        ScanPlotBaseESPs()
         Env.WuzzBasePreviewPlayer = Player
         ShowLastTradedBase(Player,true)
     end)
