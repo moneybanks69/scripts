@@ -2938,10 +2938,23 @@ local function CreateRow(Player)
     )
     Rows[Player.UserId] = Row
 end
-local function CoreLower(Value)
+Env.WuzzCoreScanner = {
+    VoiceWords = {
+        "voice",
+        "mute",
+        "unmute",
+        "speaker",
+        "microphone",
+        "mic"
+    },
+    Generation = 0,
+    Running = false,
+    LastScan = 0
+}
+Env.WuzzCoreScanner.Lower = function(Value)
     return string.lower(tostring(Value or ""))
 end
-local function CoreText(Object)
+Env.WuzzCoreScanner.Text = function(Object)
     local Success,Value = pcall(function()
         return Object.ContentText
     end)
@@ -2956,7 +2969,7 @@ local function CoreText(Object)
     end
     return ""
 end
-local function IsOurCoreObject(Object)
+Env.WuzzCoreScanner.IsOurObject = function(Object)
     local Current = Object
     while Current do
         if Current == Gui then
@@ -2969,7 +2982,7 @@ local function IsOurCoreObject(Object)
     end
     return false
 end
-local function IsCoreObjectVisible(Object)
+Env.WuzzCoreScanner.IsVisible = function(Object)
     if not Object:IsA("GuiObject") or not Object.Visible then
         return false
     end
@@ -2986,21 +2999,14 @@ local function IsCoreObjectVisible(Object)
     end
     return true
 end
-local function IsCoreMenuOpen()
+Env.WuzzCoreScanner.IsMenuOpen = function()
     local Success,Open = pcall(function()
         return GuiService.MenuIsOpen
     end)
     return Success and Open == true
 end
-local CoreVoiceWords = {
-    "voice",
-    "mute",
-    "unmute",
-    "speaker",
-    "microphone",
-    "mic"
-}
-local function AnalyzeCoreRow(Row,Player)
+Env.WuzzCoreScanner.AnalyzeRow = function(Row,Player)
+    local S = Env.WuzzCoreScanner
     local Result = {
         Buttons = 0,
         HasDisplayName = false,
@@ -3008,16 +3014,15 @@ local function AnalyzeCoreRow(Row,Player)
         HasRedVoiceMark = false
     }
     local SeenButtons = {}
-    local TargetDisplay = CoreLower(Player.DisplayName)
-    local Descendants = Row:GetDescendants()
-    for _,Object in ipairs(Descendants) do
+    local TargetDisplay = S.Lower(Player.DisplayName)
+    for _,Object in ipairs(Row:GetDescendants()) do
         if Object:IsA("TextLabel") or Object:IsA("TextButton") then
-            local Text = CoreLower(CoreText(Object))
+            local Text = S.Lower(S.Text(Object))
             if Text == TargetDisplay then
                 Result.HasDisplayName = true
             end
             if not Result.HasVoiceWord then
-                for _,Word in ipairs(CoreVoiceWords) do
+                for _,Word in ipairs(S.VoiceWords) do
                     if string.find(Text,Word,1,true) then
                         Result.HasVoiceWord = true
                         break
@@ -3026,8 +3031,8 @@ local function AnalyzeCoreRow(Row,Player)
             end
         end
         if not Result.HasVoiceWord then
-            local Name = CoreLower(Object.Name)
-            for _,Word in ipairs(CoreVoiceWords) do
+            local Name = S.Lower(Object.Name)
+            for _,Word in ipairs(S.VoiceWords) do
                 if string.find(Name,Word,1,true) then
                     Result.HasVoiceWord = true
                     break
@@ -3040,8 +3045,8 @@ local function AnalyzeCoreRow(Row,Player)
             end)
             if Success then
                 for Key,Value in pairs(Attributes) do
-                    local AttributeText = CoreLower(Key).." "..CoreLower(Value)
-                    for _,Word in ipairs(CoreVoiceWords) do
+                    local AttributeText = S.Lower(Key).." "..S.Lower(Value)
+                    for _,Word in ipairs(S.VoiceWords) do
                         if string.find(AttributeText,Word,1,true) then
                             Result.HasVoiceWord = true
                             break
@@ -3096,8 +3101,9 @@ local function AnalyzeCoreRow(Row,Player)
         or (Result.Buttons >= 3 and Result.HasRedVoiceMark)
     return Result
 end
-local function ScoreCoreRow(Row,Player,Cache)
-    if not Row:IsA("GuiObject") or not IsCoreObjectVisible(Row) then
+Env.WuzzCoreScanner.ScoreRow = function(Row,Player,Cache)
+    local S = Env.WuzzCoreScanner
+    if not Row:IsA("GuiObject") or not S.IsVisible(Row) then
         return -math.huge,false
     end
     local Size = Row.AbsoluteSize
@@ -3111,7 +3117,7 @@ local function ScoreCoreRow(Row,Player,Cache)
     end
     local Analysis = PerRow[Player.UserId]
     if not Analysis then
-        Analysis = AnalyzeCoreRow(Row,Player)
+        Analysis = S.AnalyzeRow(Row,Player)
         PerRow[Player.UserId] = Analysis
     end
     local Score = 0
@@ -3135,8 +3141,9 @@ local function ScoreCoreRow(Row,Player,Cache)
     end
     return Score,Analysis.HasVoice
 end
-local function ScanCoreVoicePlayers()
-    if not IsCoreMenuOpen() then
+Env.WuzzCoreScanner.Scan = function()
+    local S = Env.WuzzCoreScanner
+    if not S or not S.IsMenuOpen() then
         return nil,false
     end
     local Success,Descendants = pcall(function()
@@ -3149,14 +3156,14 @@ local function ScanCoreVoicePlayers()
     local PlayerByName = {}
     for _,Player in ipairs(Players:GetPlayers()) do
         if Player ~= LP then
-            PlayerByName[CoreLower(Player.Name)] = Player
+            PlayerByName[S.Lower(Player.Name)] = Player
         end
     end
     for _,Object in ipairs(Descendants) do
-        if not IsOurCoreObject(Object)
+        if not S.IsOurObject(Object)
         and (Object:IsA("TextLabel") or Object:IsA("TextButton"))
-        and IsCoreObjectVisible(Object)
-        and CoreLower(CoreText(Object)) == "people" then
+        and S.IsVisible(Object)
+        and S.Lower(S.Text(Object)) == "people" then
             PeopleVisible = true
             break
         end
@@ -3167,10 +3174,10 @@ local function ScanCoreVoicePlayers()
     local Best = {}
     local Cache = {}
     for _,Object in ipairs(Descendants) do
-        if not IsOurCoreObject(Object)
+        if not S.IsOurObject(Object)
         and (Object:IsA("TextLabel") or Object:IsA("TextButton"))
-        and IsCoreObjectVisible(Object) then
-            local Text = CoreLower(CoreText(Object))
+        and S.IsVisible(Object) then
+            local Text = S.Lower(S.Text(Object))
             Text = Text:gsub("^%s+",""):gsub("%s+$",""):gsub("^@","")
             local Player = PlayerByName[Text]
             if Player then
@@ -3178,7 +3185,7 @@ local function ScanCoreVoicePlayers()
                 local Depth = 0
                 while Current and Current ~= CoreGui and Depth < 10 do
                     if Current:IsA("GuiObject") then
-                        local Score,HasVoice = ScoreCoreRow(Current,Player,Cache)
+                        local Score,HasVoice = S.ScoreRow(Current,Player,Cache)
                         local Previous = Best[Player.UserId]
                         if not Previous or Score > Previous.Score then
                             Best[Player.UserId] = {
@@ -3205,8 +3212,12 @@ local function ScanCoreVoicePlayers()
     end)
     return Detected,true
 end
-local function RefreshCoreVoicePlayers()
-    local Detected,Scanned = ScanCoreVoicePlayers()
+Env.WuzzCoreScanner.Refresh = function()
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return false
+    end
+    local Detected,Scanned = S.Scan()
     if not Scanned then
         return false
     end
@@ -3220,62 +3231,70 @@ local function RefreshCoreVoicePlayers()
     RefreshSelectedBaseESP()
     return true
 end
-local CoreScanGeneration = 0
-local CoreScanRunning = false
-local LastCoreScan = 0
-local function ScheduleCoreScan(Delay)
-    if not IsCoreMenuOpen() then
+Env.WuzzCoreScanner.Schedule = function(Delay)
+    local S = Env.WuzzCoreScanner
+    if not S or not S.IsMenuOpen() then
         return
     end
     local Now = os.clock()
-    if Now-LastCoreScan < 0.2 then
+    if Now-S.LastScan < 0.2 then
         return
     end
-    CoreScanGeneration += 1
-    local Generation = CoreScanGeneration
+    S.Generation += 1
+    local Generation = S.Generation
     task.delay(Delay or 0.15,function()
-        if not Gui or not Gui.Parent
-        or Generation ~= CoreScanGeneration
-        or not IsCoreMenuOpen()
-        or CoreScanRunning then
+        local Current = Env.WuzzCoreScanner
+        if not Current
+        or not Gui
+        or not Gui.Parent
+        or Generation ~= Current.Generation
+        or not Current.IsMenuOpen()
+        or Current.Running then
             return
         end
-        CoreScanRunning = true
-        LastCoreScan = os.clock()
-        pcall(RefreshCoreVoicePlayers)
-        CoreScanRunning = false
+        Current.Running = true
+        Current.LastScan = os.clock()
+        pcall(Current.Refresh)
+        Current.Running = false
     end)
 end
 Connect(
     GuiService:GetPropertyChangedSignal("MenuIsOpen"),
     function()
-        if IsCoreMenuOpen() then
-            ScheduleCoreScan(0.18)
+        local S = Env.WuzzCoreScanner
+        if not S then
+            return
+        end
+        if S.IsMenuOpen() then
+            S.Schedule(0.18)
         else
-            CoreScanGeneration += 1
+            S.Generation += 1
         end
     end
 )
 Connect(
     CoreGui.DescendantAdded,
     function(Object)
-        if IsCoreMenuOpen() and not IsOurCoreObject(Object) then
-            ScheduleCoreScan(0.18)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() and not S.IsOurObject(Object) then
+            S.Schedule(0.18)
         end
     end
 )
 Connect(
     CoreGui.DescendantRemoving,
     function(Object)
-        if IsCoreMenuOpen() and not IsOurCoreObject(Object) then
-            ScheduleCoreScan(0.18)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() and not S.IsOurObject(Object) then
+            S.Schedule(0.18)
         end
     end
 )
 task.spawn(function()
     while Gui and Gui.Parent do
-        if IsCoreMenuOpen() then
-            ScheduleCoreScan(0)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() then
+            S.Schedule(0)
             task.wait(1.1)
         else
             task.wait(0.4)
@@ -3285,8 +3304,9 @@ end)
 Connect(
     Players.PlayerAdded,
     function()
-        if IsCoreMenuOpen() then
-            ScheduleCoreScan(0.15)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() then
+            S.Schedule(0.15)
         end
     end
 )
@@ -3299,8 +3319,9 @@ Connect(
             SelectedTradePlayer = nil
             ClearSelectedBaseESP()
         end
-        if IsCoreMenuOpen() then
-            ScheduleCoreScan(0.15)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() then
+            S.Schedule(0.15)
         end
     end
 )
