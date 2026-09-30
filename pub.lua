@@ -2683,21 +2683,23 @@ local function ShowLastTradedBase(Player,ForceShow)
     return true
 end
 local function SetLastTradedBase(Player)
+    Env.WuzzBasePreviewPlayer = nil
     LastTradedPlayer = Player
     ShowLastTradedBase(Player,true)
 end
 task.spawn(function()
     while Gui and Gui.Parent do
-        if LastTradedPlayer
-        and LastTradedPlayer.Parent == Players
+        local ViewerPlayer = Env.WuzzBasePreviewPlayer or LastTradedPlayer
+        if ViewerPlayer
+        and ViewerPlayer.Parent == Players
         and BaseViewerFrame
         and BaseViewerFrame.Parent
         and BaseViewerFrame.Visible then
-            local Plot = GetMainPlotFromMatchedSign(LastTradedPlayer)
+            local Plot = GetMainPlotFromMatchedSign(ViewerPlayer)
             if Plot and (not BaseViewerCurrentClone or BaseViewerCurrentPlot ~= Plot) then
-                ShowLastTradedBase(LastTradedPlayer,false)
+                ShowLastTradedBase(ViewerPlayer,false)
             elseif not Plot and BaseViewerTitle then
-                BaseViewerTitle.Text = LastTradedPlayer.Name
+                BaseViewerTitle.Text = ViewerPlayer.Name
             end
         end
         task.wait(0.8)
@@ -2914,7 +2916,8 @@ local function CreateRow(Player)
     BaseStroke.Transparency = 0.22
     BaseStroke.Parent = Base
     Connect(Base.MouseButton1Click,function()
-        SetLastTradedBase(Player)
+        Env.WuzzBasePreviewPlayer = Player
+        ShowLastTradedBase(Player,true)
     end)
     local Trade = Instance.new("TextButton")
     Trade.Name = "Trade"
@@ -3370,6 +3373,15 @@ Connect(
         end
         RebuildBasePlayerMaps()
         SelectedTradePlayersUntil[Player.UserId] = nil
+        if Env.WuzzBasePreviewPlayer == Player then
+            Env.WuzzBasePreviewPlayer = nil
+            if BaseViewerFrame and BaseViewerFrame.Parent then
+                BaseViewerFrame.Visible = false
+            end
+        end
+        if LastTradedPlayer == Player then
+            LastTradedPlayer = nil
+        end
         if SelectedTradePlayer == Player then
             SelectedTradePlayer = nil
             ClearSelectedBaseESP()
