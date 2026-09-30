@@ -1063,8 +1063,8 @@ local function RunAutoMessageWorker(Generation)
         SetAutoMessageEnabled(false)
         return
     end
-    for _,Message in ipairs(Messages) do
-        if not WaitAutoMessageDelay(Generation) then
+    for Index,Message in ipairs(Messages) do
+        if Index > 1 and not WaitAutoMessageDelay(Generation) then
             return
         end
         local Sent = false
