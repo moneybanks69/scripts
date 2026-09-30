@@ -2949,7 +2949,9 @@ Env.WuzzCoreScanner = {
     },
     Generation = 0,
     Running = false,
-    LastScan = 0
+    LastScan = 0,
+    Saved = {},
+    SavedOrder = {}
 }
 Env.WuzzCoreScanner.Lower = function(Value)
     return string.lower(tostring(Value or ""))
@@ -3212,6 +3214,51 @@ Env.WuzzCoreScanner.Scan = function()
     end)
     return Detected,true
 end
+Env.WuzzCoreScanner.Store = function(List)
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return
+    end
+    table.clear(S.Saved)
+    S.SavedOrder = {}
+    for _,Player in ipairs(List or {}) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and not S.Saved[Player.UserId] then
+            S.Saved[Player.UserId] = Player
+            table.insert(S.SavedOrder,Player)
+        end
+    end
+end
+Env.WuzzCoreScanner.RenderSaved = function()
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return
+    end
+    local Cleaned = {}
+    for _,Player in ipairs(S.SavedOrder) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and S.Saved[Player.UserId] == Player then
+            table.insert(Cleaned,Player)
+        else
+            if Player then
+                S.Saved[Player.UserId] = nil
+            end
+        end
+    end
+    S.SavedOrder = Cleaned
+    SetFetchedBasePlayers(Cleaned)
+    ClearRows()
+    for _,Player in ipairs(Cleaned) do
+        CreateRow(Player)
+    end
+    RefreshBasePlayerList()
+    ScanPlotBaseESPs()
+    RefreshSelectedBaseESP()
+end
 Env.WuzzCoreScanner.Refresh = function()
     local S = Env.WuzzCoreScanner
     if not S then
@@ -3221,14 +3268,8 @@ Env.WuzzCoreScanner.Refresh = function()
     if not Scanned then
         return false
     end
-    SetFetchedBasePlayers(Detected)
-    ClearRows()
-    for _,Player in ipairs(Detected) do
-        CreateRow(Player)
-    end
-    RefreshBasePlayerList()
-    ScanPlotBaseESPs()
-    RefreshSelectedBaseESP()
+    S.Store(Detected)
+    S.RenderSaved()
     return true
 end
 Env.WuzzCoreScanner.Schedule = function(Delay)
@@ -3290,17 +3331,6 @@ Connect(
         end
     end
 )
-task.spawn(function()
-    while Gui and Gui.Parent do
-        local S = Env.WuzzCoreScanner
-        if S and S.IsMenuOpen() then
-            S.Schedule(0)
-            task.wait(1.1)
-        else
-            task.wait(0.4)
-        end
-    end
-end)
 Connect(
     Players.PlayerAdded,
     function()
@@ -3313,6 +3343,17 @@ Connect(
 Connect(
     Players.PlayerRemoving,
     function(Player)
+        local S = Env.WuzzCoreScanner
+        if S then
+            S.Saved[Player.UserId] = nil
+            for Index = #S.SavedOrder,1,-1 do
+                local CachedPlayer = S.SavedOrder[Index]
+                if CachedPlayer == Player
+                or (CachedPlayer and CachedPlayer.UserId == Player.UserId) then
+                    table.remove(S.SavedOrder,Index)
+                end
+            end
+        end
         RemoveRow(Player.UserId)
         for Index = #FetchedListPlayers,1,-1 do
             local CachedPlayer = FetchedListPlayers[Index]
@@ -3329,7 +3370,6 @@ Connect(
         end
         ScanPlotBaseESPs()
         RefreshSelectedBaseESP()
-        local S = Env.WuzzCoreScanner
         if S and S.IsMenuOpen() then
             S.Schedule(0.15)
         end
