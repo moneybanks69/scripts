@@ -3314,11 +3314,21 @@ Connect(
     Players.PlayerRemoving,
     function(Player)
         RemoveRow(Player.UserId)
+        for Index = #FetchedListPlayers,1,-1 do
+            local CachedPlayer = FetchedListPlayers[Index]
+            if CachedPlayer == Player
+            or (CachedPlayer and CachedPlayer.UserId == Player.UserId) then
+                table.remove(FetchedListPlayers,Index)
+            end
+        end
+        RebuildBasePlayerMaps()
         SelectedTradePlayersUntil[Player.UserId] = nil
         if SelectedTradePlayer == Player then
             SelectedTradePlayer = nil
             ClearSelectedBaseESP()
         end
+        ScanPlotBaseESPs()
+        RefreshSelectedBaseESP()
         local S = Env.WuzzCoreScanner
         if S and S.IsMenuOpen() then
             S.Schedule(0.15)
@@ -3373,4 +3383,9 @@ task.spawn(function()
         task.wait(0.08)
     end
 end)
-ScheduleChatScan()
+task.defer(function()
+    local S = Env.WuzzCoreScanner
+    if S and S.IsMenuOpen() then
+        S.Schedule(0.18)
+    end
+end)
