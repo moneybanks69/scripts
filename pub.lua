@@ -3219,8 +3219,6 @@ Env.WuzzCoreScanner.Store = function(List)
     if not S then
         return
     end
-    table.clear(S.Saved)
-    S.SavedOrder = {}
     for _,Player in ipairs(List or {}) do
         if Player
         and Player ~= LP
@@ -3230,6 +3228,9 @@ Env.WuzzCoreScanner.Store = function(List)
             table.insert(S.SavedOrder,Player)
         end
     end
+    table.sort(S.SavedOrder,function(A,B)
+        return string.lower(A.DisplayName) < string.lower(B.DisplayName)
+    end)
 end
 Env.WuzzCoreScanner.RenderSaved = function()
     local S = Env.WuzzCoreScanner
