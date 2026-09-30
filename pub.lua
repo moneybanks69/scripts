@@ -204,6 +204,7 @@ local function PackPosition(Position)
     }
 end
 local Main = Instance.new("Frame")
+Main.Name = "MainWindow"
 Main.Size = UDim2.fromOffset(365,500)
 Main.Position = SavedPosition("Main",UDim2.new(1,-390,0.5,-250))
 Main.BackgroundColor3 = Color3.fromRGB(10,7,17)
@@ -225,6 +226,10 @@ SaveGuiPositions = function()
     if FrienderFrame and FrienderFrame.Parent then
         SavedGuiPositions.Friender = PackPosition(FrienderFrame.Position)
     end
+    local PlazaHopper = Gui and Gui:FindFirstChild("WuzzPlazaHopper")
+    if PlazaHopper and PlazaHopper:IsA("GuiObject") then
+        SavedGuiPositions.PlazaHopper = PackPosition(PlazaHopper.Position)
+    end
     if writefile then
         pcall(function()
             writefile(GuiPositionFile,HttpService:JSONEncode(SavedGuiPositions))
@@ -234,29 +239,65 @@ end
 
 do
     local function CreateWuzzControlBar()
-        local GuiScale = math.clamp(tonumber(SavedGuiPositions.GuiScale) or 1,0.60,1.50)
-        SavedGuiPositions.GuiScale = GuiScale
+        local SCALE_MIN = 0.60
+        local SCALE_MAX = 1.50
+        local OldGlobalScale = math.clamp(tonumber(SavedGuiPositions.GuiScale) or 1, SCALE_MIN, SCALE_MAX)
+        if type(SavedGuiPositions.GuiScales) ~= "table" then
+            SavedGuiPositions.GuiScales = {}
+        end
+        local ScaleValues = SavedGuiPositions.GuiScales
+        local ScaleDefaults = {
+            Main = OldGlobalScale,
+            Friender = OldGlobalScale,
+            AutoMessage = OldGlobalScale,
+            BaseViewer = OldGlobalScale,
+            PlazaHopper = OldGlobalScale
+        }
+        for Key,Default in pairs(ScaleDefaults) do
+            ScaleValues[Key] = math.clamp(tonumber(ScaleValues[Key]) or Default,SCALE_MIN,SCALE_MAX)
+        end
+        SavedGuiPositions.GuiScale = nil
         SavedGuiPositions.GuiLocked = SavedGuiPositions.GuiLocked == true
 
-        local function EnsureScale(Object)
-            if not Object or not Object:IsA("GuiObject") or Object.Parent ~= Gui then
-                return
+        local function GetScaleKey(Object)
+            if Object == Main then
+                return "Main"
             end
-            local Scale = Object:FindFirstChild("WuzzGlobalScale")
-            if not Scale then
-                Scale = Instance.new("UIScale")
-                Scale.Name = "WuzzGlobalScale"
-                Scale.Parent = Object
+            if not Object then
+                return nil
             end
-            Scale.Scale = GuiScale
+            if Object.Name == "WuzzFriender" then
+                return "Friender"
+            elseif Object.Name == "AutoMessageWindow" then
+                return "AutoMessage"
+            elseif Object.Name == "LastTradeBaseViewer" then
+                return "BaseViewer"
+            elseif Object.Name == "WuzzPlazaHopper" then
+                return "PlazaHopper"
+            end
+            return nil
         end
 
-        local function ApplyScale(Value,ShouldSave)
-            GuiScale = math.clamp(tonumber(Value) or GuiScale,0.60,1.50)
-            SavedGuiPositions.GuiScale = GuiScale
+        local function ApplyObjectScale(Object)
+            local Key = GetScaleKey(Object)
+            if not Key or not Object:IsA("GuiObject") then
+                return
+            end
+            local Scale = Object:FindFirstChild("WuzzWindowScale")
+            if not Scale then
+                Scale = Instance.new("UIScale")
+                Scale.Name = "WuzzWindowScale"
+                Scale.Parent = Object
+            end
+            Scale.Scale = ScaleValues[Key] or 1
+        end
+
+        local function ApplyScale(Key,Value,ShouldSave)
+            ScaleValues[Key] = math.clamp(tonumber(Value) or ScaleValues[Key] or 1,SCALE_MIN,SCALE_MAX)
+            SavedGuiPositions.GuiScales = ScaleValues
             for _,Object in ipairs(Gui:GetChildren()) do
-                if Object:IsA("GuiObject") then
-                    EnsureScale(Object)
+                if GetScaleKey(Object) == Key then
+                    ApplyObjectScale(Object)
                 end
             end
             if ShouldSave ~= false and SaveGuiPositions then
@@ -264,11 +305,14 @@ do
             end
         end
 
+        for _,Object in ipairs(Gui:GetChildren()) do
+            ApplyObjectScale(Object)
+        end
         Connect(Gui.ChildAdded,function(Object)
             task.spawn(function()
                 task.wait()
-                if Object and Object.Parent == Gui and Object:IsA("GuiObject") then
-                    EnsureScale(Object)
+                if Object and Object.Parent == Gui then
+                    ApplyObjectScale(Object)
                 end
             end)
         end)
@@ -288,13 +332,11 @@ do
         local TopBarCorner = Instance.new("UICorner")
         TopBarCorner.CornerRadius = UDim.new(0,18)
         TopBarCorner.Parent = TopBar
-
         local TopBarStroke = Instance.new("UIStroke")
         TopBarStroke.Thickness = 2
         TopBarStroke.Color = Color3.fromRGB(190,80,255)
         TopBarStroke.Transparency = 0.04
         TopBarStroke.Parent = TopBar
-
         local TopBarStrokeGradient = Instance.new("UIGradient")
         TopBarStrokeGradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0,Color3.fromRGB(92,30,190)),
@@ -304,7 +346,6 @@ do
             ColorSequenceKeypoint.new(1,Color3.fromRGB(92,30,190))
         })
         TopBarStrokeGradient.Parent = TopBarStroke
-
         local TopBarGradient = Instance.new("UIGradient")
         TopBarGradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0,Color3.fromRGB(31,12,49)),
@@ -321,7 +362,6 @@ do
         TopParticles.ClipsDescendants = true
         TopParticles.ZIndex = 101
         TopParticles.Parent = TopBar
-
         for _ = 1,11 do
             local P = Instance.new("Frame")
             local S = math.random(2,4)
@@ -449,82 +489,146 @@ do
         SettingsStrokeGradient.Color = TopBarStrokeGradient.Color
         SettingsStrokeGradient.Parent = SettingsStroke
 
-        local SettingsHeader = Instance.new("TextLabel")
-        SettingsHeader.Size = UDim2.fromOffset(96,18)
-        SettingsHeader.Position = UDim2.fromOffset(16,12)
-        SettingsHeader.BackgroundTransparency = 1
-        SettingsHeader.Text = "GUI SCALE"
-        SettingsHeader.TextColor3 = Color3.fromRGB(198,166,220)
-        SettingsHeader.Font = Enum.Font.GothamBold
-        SettingsHeader.TextSize = 10
-        SettingsHeader.TextXAlignment = Enum.TextXAlignment.Left
-        SettingsHeader.ZIndex = 101
-        SettingsHeader.Parent = SettingsPanel
+        local Rows = {}
+        local ActiveSlider = nil
+        local RowDefinitions = {
+            {Key="Main",Label="MAIN"},
+            {Key="Friender",Label="FRIENDER"},
+            {Key="AutoMessage",Label="AUTO MESSAGE"},
+            {Key="BaseViewer",Label="BASE PREVIEW"},
+            {Key="PlazaHopper",Label="PLAZA HOPPER"}
+        }
 
-        local ScaleBox = Instance.new("TextBox")
-        ScaleBox.Size = UDim2.fromOffset(70,30)
-        ScaleBox.Position = UDim2.fromOffset(16,34)
-        ScaleBox.BackgroundColor3 = Color3.fromRGB(29,17,42)
-        ScaleBox.BorderSizePixel = 0
-        ScaleBox.ClearTextOnFocus = false
-        ScaleBox.TextColor3 = Color3.fromRGB(247,234,255)
-        ScaleBox.PlaceholderText = "100%"
-        ScaleBox.Font = Enum.Font.GothamBold
-        ScaleBox.TextSize = 11
-        ScaleBox.ZIndex = 101
-        ScaleBox.Parent = SettingsPanel
-        local ScaleBoxCorner = Instance.new("UICorner")
-        ScaleBoxCorner.CornerRadius = UDim.new(0,9)
-        ScaleBoxCorner.Parent = ScaleBox
-        local ScaleBoxStroke = Instance.new("UIStroke")
-        ScaleBoxStroke.Color = Color3.fromRGB(131,56,197)
-        ScaleBoxStroke.Transparency = 0.28
-        ScaleBoxStroke.Parent = ScaleBox
+        local function RefreshRow(Key)
+            local Row = Rows[Key]
+            if not Row then
+                return
+            end
+            local Value = ScaleValues[Key] or 1
+            local Alpha = math.clamp((Value-SCALE_MIN)/(SCALE_MAX-SCALE_MIN),0,1)
+            Row.Fill.Size = UDim2.new(Alpha,0,1,0)
+            Row.Knob.Position = UDim2.new(Alpha,0,0.5,0)
+            Row.Box.Text = tostring(math.floor(Value*100+0.5)).."%"
+        end
 
-        local SliderTrack = Instance.new("Frame")
-        SliderTrack.Size = UDim2.fromOffset(330,7)
-        SliderTrack.Position = UDim2.fromOffset(102,46)
-        SliderTrack.BackgroundColor3 = Color3.fromRGB(47,29,63)
-        SliderTrack.BorderSizePixel = 0
-        SliderTrack.ZIndex = 101
-        SliderTrack.Parent = SettingsPanel
-        local SliderCorner = Instance.new("UICorner")
-        SliderCorner.CornerRadius = UDim.new(1,0)
-        SliderCorner.Parent = SliderTrack
-        local SliderFill = Instance.new("Frame")
-        SliderFill.Size = UDim2.new(0,0,1,0)
-        SliderFill.BackgroundColor3 = Color3.fromRGB(177,77,255)
-        SliderFill.BorderSizePixel = 0
-        SliderFill.ZIndex = 102
-        SliderFill.Parent = SliderTrack
-        local SliderFillCorner = Instance.new("UICorner")
-        SliderFillCorner.CornerRadius = UDim.new(1,0)
-        SliderFillCorner.Parent = SliderFill
-        local SliderFillGradient = Instance.new("UIGradient")
-        SliderFillGradient.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0,Color3.fromRGB(117,46,215)),
-            ColorSequenceKeypoint.new(1,Color3.fromRGB(228,112,255))
-        })
-        SliderFillGradient.Parent = SliderFill
-        local SliderKnob = Instance.new("Frame")
-        SliderKnob.AnchorPoint = Vector2.new(0.5,0.5)
-        SliderKnob.Size = UDim2.fromOffset(17,17)
-        SliderKnob.Position = UDim2.new(0,0,0.5,0)
-        SliderKnob.BackgroundColor3 = Color3.fromRGB(235,177,255)
-        SliderKnob.BorderSizePixel = 0
-        SliderKnob.ZIndex = 103
-        SliderKnob.Parent = SliderTrack
-        local SliderKnobCorner = Instance.new("UICorner")
-        SliderKnobCorner.CornerRadius = UDim.new(1,0)
-        SliderKnobCorner.Parent = SliderKnob
-        local SliderKnobStroke = Instance.new("UIStroke")
-        SliderKnobStroke.Color = Color3.fromRGB(153,61,229)
-        SliderKnobStroke.Transparency = 0.05
-        SliderKnobStroke.Parent = SliderKnob
+        local function ApplyTextScale(Key)
+            local Row = Rows[Key]
+            if not Row then
+                return
+            end
+            local Raw = tostring(Row.Box.Text or "")
+            local HasPercent = string.find(Raw,"%%",1,false) ~= nil
+            local Number = tonumber((Raw:gsub("[^%d%.%-]","")))
+            if not Number then
+                RefreshRow(Key)
+                return
+            end
+            if HasPercent or math.abs(Number) > 3 then
+                Number = Number/100
+            end
+            ApplyScale(Key,Number,true)
+            RefreshRow(Key)
+        end
+
+        local function ApplySliderScale(Key,Track,ScreenX,ShouldSave)
+            local Alpha = (ScreenX-Track.AbsolutePosition.X)/math.max(Track.AbsoluteSize.X,1)
+            Alpha = math.clamp(Alpha,0,1)
+            ApplyScale(Key,SCALE_MIN+(SCALE_MAX-SCALE_MIN)*Alpha,ShouldSave)
+            RefreshRow(Key)
+        end
+
+        for Index,Definition in ipairs(RowDefinitions) do
+            local Y = 12+(Index-1)*38
+            local Label = Instance.new("TextLabel")
+            Label.Size = UDim2.fromOffset(124,30)
+            Label.Position = UDim2.fromOffset(16,Y)
+            Label.BackgroundTransparency = 1
+            Label.Text = Definition.Label
+            Label.TextColor3 = Color3.fromRGB(205,180,224)
+            Label.Font = Enum.Font.GothamBold
+            Label.TextSize = 10
+            Label.TextXAlignment = Enum.TextXAlignment.Left
+            Label.ZIndex = 101
+            Label.Parent = SettingsPanel
+
+            local Track = Instance.new("Frame")
+            Track.Size = UDim2.fromOffset(315,8)
+            Track.Position = UDim2.fromOffset(147,Y+11)
+            Track.BackgroundColor3 = Color3.fromRGB(42,26,57)
+            Track.BorderSizePixel = 0
+            Track.Active = true
+            Track.ZIndex = 102
+            Track.Parent = SettingsPanel
+            local TrackCorner = Instance.new("UICorner")
+            TrackCorner.CornerRadius = UDim.new(1,0)
+            TrackCorner.Parent = Track
+            local Fill = Instance.new("Frame")
+            Fill.Size = UDim2.new(0,0,1,0)
+            Fill.BackgroundColor3 = Color3.fromRGB(176,76,255)
+            Fill.BorderSizePixel = 0
+            Fill.ZIndex = 102
+            Fill.Parent = Track
+            local FillCorner = Instance.new("UICorner")
+            FillCorner.CornerRadius = UDim.new(1,0)
+            FillCorner.Parent = Fill
+            local FillGradient = Instance.new("UIGradient")
+            FillGradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,Color3.fromRGB(117,46,215)),
+                ColorSequenceKeypoint.new(1,Color3.fromRGB(228,112,255))
+            })
+            FillGradient.Parent = Fill
+            local Knob = Instance.new("Frame")
+            Knob.AnchorPoint = Vector2.new(0.5,0.5)
+            Knob.Size = UDim2.fromOffset(16,16)
+            Knob.Position = UDim2.new(0,0,0.5,0)
+            Knob.BackgroundColor3 = Color3.fromRGB(235,177,255)
+            Knob.BorderSizePixel = 0
+            Knob.Active = true
+            Knob.ZIndex = 103
+            Knob.Parent = Track
+            local KnobCorner = Instance.new("UICorner")
+            KnobCorner.CornerRadius = UDim.new(1,0)
+            KnobCorner.Parent = Knob
+            local Box = Instance.new("TextBox")
+            Box.Size = UDim2.fromOffset(72,30)
+            Box.Position = UDim2.fromOffset(478,Y)
+            Box.BackgroundColor3 = Color3.fromRGB(31,18,44)
+            Box.BorderSizePixel = 0
+            Box.ClearTextOnFocus = false
+            Box.TextColor3 = Color3.fromRGB(246,233,255)
+            Box.Font = Enum.Font.GothamBold
+            Box.TextSize = 10
+            Box.ZIndex = 102
+            Box.Parent = SettingsPanel
+            local BoxCorner = Instance.new("UICorner")
+            BoxCorner.CornerRadius = UDim.new(0,9)
+            BoxCorner.Parent = Box
+            local BoxStroke = Instance.new("UIStroke")
+            BoxStroke.Color = Color3.fromRGB(132,57,192)
+            BoxStroke.Transparency = 0.35
+            BoxStroke.Parent = Box
+
+            Rows[Definition.Key] = {Track=Track,Fill=Fill,Knob=Knob,Box=Box}
+            Connect(Box.FocusLost,function()
+                ApplyTextScale(Definition.Key)
+            end)
+            Connect(Track.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    ActiveSlider = {Key=Definition.Key,Track=Track}
+                    ApplySliderScale(Definition.Key,Track,Input.Position.X,false)
+                end
+            end)
+            Connect(Knob.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    ActiveSlider = {Key=Definition.Key,Track=Track}
+                end
+            end)
+            RefreshRow(Definition.Key)
+        end
 
         local LockButton = Instance.new("TextButton")
-        LockButton.Size = UDim2.fromOffset(145,34)
-        LockButton.Position = UDim2.new(1,-161,0,31)
+        LockButton.Size = UDim2.fromOffset(170,34)
+        LockButton.Position = UDim2.new(1,-186,0,208)
         LockButton.BackgroundColor3 = Color3.fromRGB(74,31,112)
         LockButton.BorderSizePixel = 0
         LockButton.TextColor3 = Color3.fromRGB(255,242,255)
@@ -541,30 +645,7 @@ do
         LockStroke.Transparency = 0.25
         LockStroke.Parent = LockButton
 
-        local SettingsHint = Instance.new("TextLabel")
-        SettingsHint.Size = UDim2.new(1,-32,0,20)
-        SettingsHint.Position = UDim2.fromOffset(16,73)
-        SettingsHint.BackgroundTransparency = 1
-        SettingsHint.Text = "Scale range 60% - 150%   •   Lock prevents GUI windows from being dragged"
-        SettingsHint.TextColor3 = Color3.fromRGB(132,112,148)
-        SettingsHint.Font = Enum.Font.GothamMedium
-        SettingsHint.TextSize = 9
-        SettingsHint.TextXAlignment = Enum.TextXAlignment.Left
-        SettingsHint.ZIndex = 101
-        SettingsHint.Parent = SettingsPanel
-
-        local SCALE_MIN = 0.60
-        local SCALE_MAX = 1.50
         local SettingsOpen = false
-        local SliderDragging = false
-
-        local function RefreshScaleControls()
-            local Alpha = math.clamp((GuiScale-SCALE_MIN)/(SCALE_MAX-SCALE_MIN),0,1)
-            SliderFill.Size = UDim2.new(Alpha,0,1,0)
-            SliderKnob.Position = UDim2.new(Alpha,0,0.5,0)
-            ScaleBox.Text = tostring(math.floor(GuiScale*100+0.5)).."%"
-        end
-
         local function RefreshLockButton()
             if SavedGuiPositions.GuiLocked == true then
                 LockButton.Text = "GUI LOCK  •  ON"
@@ -576,31 +657,9 @@ do
                 LockStroke.Transparency = 0.25
             end
         end
-
-        local function ApplyScaleFromAlpha(Alpha,ShouldSave)
-            Alpha = math.clamp(Alpha,0,1)
-            ApplyScale(SCALE_MIN+(SCALE_MAX-SCALE_MIN)*Alpha,ShouldSave)
-            RefreshScaleControls()
-        end
-
-        local function ApplyScaleText()
-            local Raw = tostring(ScaleBox.Text or "")
-            local HasPercent = string.find(Raw,"%%",1,false) ~= nil
-            local Number = tonumber((Raw:gsub("[^%d%.%-]","")))
-            if not Number then
-                RefreshScaleControls()
-                return
-            end
-            if HasPercent or math.abs(Number) > 3 then
-                Number = Number/100
-            end
-            ApplyScale(Number,true)
-            RefreshScaleControls()
-        end
-
         local function SetSettingsOpen(State)
             SettingsOpen = State == true
-            local TargetSize = SettingsOpen and UDim2.fromOffset(610,102) or UDim2.fromOffset(610,0)
+            local TargetSize = SettingsOpen and UDim2.fromOffset(610,254) or UDim2.fromOffset(610,0)
             TweenService:Create(SettingsPanel,TweenInfo.new(0.24,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
                 Size = TargetSize,
                 BackgroundTransparency = SettingsOpen and 0.03 or 1
@@ -631,37 +690,330 @@ do
                 pcall(SaveGuiPositions)
             end
         end)
-        Connect(ScaleBox.FocusLost,function()
-            ApplyScaleText()
-        end)
-        Connect(SliderTrack.InputBegan,function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-                SliderDragging = true
-                local Alpha = (Input.Position.X-SliderTrack.AbsolutePosition.X)/math.max(SliderTrack.AbsoluteSize.X,1)
-                ApplyScaleFromAlpha(Alpha,false)
-            end
-        end)
-        Connect(SliderKnob.InputBegan,function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-                SliderDragging = true
-            end
-        end)
         Connect(UserInputService.InputChanged,function(Input)
-            if SliderDragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
-                local Alpha = (Input.Position.X-SliderTrack.AbsolutePosition.X)/math.max(SliderTrack.AbsoluteSize.X,1)
-                ApplyScaleFromAlpha(Alpha,false)
+            if ActiveSlider and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+                ApplySliderScale(ActiveSlider.Key,ActiveSlider.Track,Input.Position.X,false)
             end
         end)
         Connect(UserInputService.InputEnded,function(Input)
             if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-                if SliderDragging then
-                    SliderDragging = false
+                if ActiveSlider then
+                    ActiveSlider = nil
                     if SaveGuiPositions then
                         pcall(SaveGuiPositions)
                     end
                 end
             end
         end)
+
+        local function CreatePlazaHopper()
+            local TeleportService = game:GetService("TeleportService")
+            local NORMAL_PLACE_ID = 78906538690694
+            local PRO_PLACE_ID = 119594317142884
+            local Hopper = Instance.new("Frame")
+            Hopper.Name = "WuzzPlazaHopper"
+            Hopper.Size = UDim2.fromOffset(330,174)
+            Hopper.Position = SavedPosition("PlazaHopper",UDim2.new(0,24,0.5,-87))
+            Hopper.BackgroundColor3 = Color3.fromRGB(10,7,17)
+            Hopper.BorderSizePixel = 0
+            Hopper.ClipsDescendants = true
+            Hopper.Active = true
+            Hopper.ZIndex = 40
+            Hopper.Parent = Gui
+            ApplyObjectScale(Hopper)
+
+            local HopperCorner = Instance.new("UICorner")
+            HopperCorner.CornerRadius = UDim.new(0,16)
+            HopperCorner.Parent = Hopper
+            local HopperStroke = Instance.new("UIStroke")
+            HopperStroke.Thickness = 2
+            HopperStroke.Color = Color3.fromRGB(180,70,255)
+            HopperStroke.Parent = Hopper
+            local HopperStrokeGradient = Instance.new("UIGradient")
+            HopperStrokeGradient.Color = TopBarStrokeGradient.Color
+            HopperStrokeGradient.Parent = HopperStroke
+            local HopperBG = Instance.new("UIGradient")
+            HopperBG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,Color3.fromRGB(29,10,47)),
+                ColorSequenceKeypoint.new(0.5,Color3.fromRGB(11,7,18)),
+                ColorSequenceKeypoint.new(1,Color3.fromRGB(32,10,50))
+            })
+            HopperBG.Rotation = 30
+            HopperBG.Parent = Hopper
+
+            local Header = Instance.new("Frame")
+            Header.Size = UDim2.new(1,0,0,58)
+            Header.BackgroundTransparency = 1
+            Header.Active = true
+            Header.ZIndex = 42
+            Header.Parent = Hopper
+            local Logo = Instance.new("Frame")
+            Logo.Size = UDim2.fromOffset(36,36)
+            Logo.Position = UDim2.fromOffset(12,11)
+            Logo.BackgroundColor3 = Color3.fromRGB(78,29,126)
+            Logo.BorderSizePixel = 0
+            Logo.ZIndex = 43
+            Logo.Parent = Header
+            local LogoCorner = Instance.new("UICorner")
+            LogoCorner.CornerRadius = UDim.new(0,10)
+            LogoCorner.Parent = Logo
+            local LogoText = Instance.new("TextLabel")
+            LogoText.Size = UDim2.fromScale(1,1)
+            LogoText.BackgroundTransparency = 1
+            LogoText.Text = "W"
+            LogoText.TextColor3 = Color3.fromRGB(240,195,255)
+            LogoText.Font = Enum.Font.GothamBlack
+            LogoText.TextSize = 18
+            LogoText.ZIndex = 44
+            LogoText.Parent = Logo
+            local Title = Instance.new("TextLabel")
+            Title.Size = UDim2.new(1,-72,0,24)
+            Title.Position = UDim2.fromOffset(59,8)
+            Title.BackgroundTransparency = 1
+            Title.Text = "Plaza Hopper"
+            Title.TextColor3 = Color3.fromRGB(250,240,255)
+            Title.Font = Enum.Font.GothamBold
+            Title.TextSize = 16
+            Title.TextXAlignment = Enum.TextXAlignment.Left
+            Title.ZIndex = 43
+            Title.Parent = Header
+            local Status = Instance.new("TextLabel")
+            Status.Size = UDim2.new(1,-72,0,17)
+            Status.Position = UDim2.fromOffset(59,31)
+            Status.BackgroundTransparency = 1
+            Status.Text = "Choose a server"
+            Status.TextColor3 = Color3.fromRGB(166,143,183)
+            Status.Font = Enum.Font.GothamMedium
+            Status.TextSize = 9
+            Status.TextXAlignment = Enum.TextXAlignment.Left
+            Status.TextTruncate = Enum.TextTruncate.AtEnd
+            Status.ZIndex = 43
+            Status.Parent = Header
+
+            local function MakeButton(Text,X)
+                local Button = Instance.new("TextButton")
+                Button.Size = UDim2.fromOffset(145,40)
+                Button.Position = UDim2.fromOffset(X,75)
+                Button.BackgroundColor3 = Color3.fromRGB(77,31,119)
+                Button.BorderSizePixel = 0
+                Button.Text = Text
+                Button.TextColor3 = Color3.fromRGB(255,245,255)
+                Button.Font = Enum.Font.GothamBold
+                Button.TextSize = 11
+                Button.AutoButtonColor = false
+                Button.ZIndex = 43
+                Button.Parent = Hopper
+                local Corner = Instance.new("UICorner")
+                Corner.CornerRadius = UDim.new(0,10)
+                Corner.Parent = Button
+                local Stroke = Instance.new("UIStroke")
+                Stroke.Color = Color3.fromRGB(191,91,255)
+                Stroke.Transparency = 0.2
+                Stroke.Parent = Button
+                local Gradient = Instance.new("UIGradient")
+                Gradient.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0,Color3.fromRGB(142,55,220)),
+                    ColorSequenceKeypoint.new(1,Color3.fromRGB(88,34,145))
+                })
+                Gradient.Rotation = 35
+                Gradient.Parent = Button
+                Connect(Button.MouseEnter,function()
+                    TweenService:Create(Stroke,TweenInfo.new(0.12),{Transparency=0}):Play()
+                end)
+                Connect(Button.MouseLeave,function()
+                    TweenService:Create(Stroke,TweenInfo.new(0.12),{Transparency=0.2}):Play()
+                end)
+                return Button
+            end
+
+            local Normal = MakeButton("NORMAL",13)
+            local Pro = MakeButton("PRO",172)
+            local function HttpGet(URL)
+                local Success,Result = pcall(function()
+                    return game:HttpGet(URL)
+                end)
+                if Success and type(Result) == "string" then
+                    return Result
+                end
+                local Request = request or http_request or (syn and syn.request)
+                if Request then
+                    local RequestSuccess,Response = pcall(function()
+                        return Request({Url=URL,Method="GET"})
+                    end)
+                    if RequestSuccess and Response and type(Response.Body) == "string" then
+                        return Response.Body
+                    end
+                end
+                return nil
+            end
+
+            local function Shuffle(List)
+                for Index = #List,2,-1 do
+                    local RandomIndex = math.random(1,Index)
+                    List[Index],List[RandomIndex] = List[RandomIndex],List[Index]
+                end
+            end
+
+            local function GetServers(PlaceId)
+                if Env.WuzzPlazaServers and Env.WuzzPlazaServers.Prune then
+                    pcall(Env.WuzzPlazaServers.Prune)
+                end
+                local Servers = {}
+                local Cursor = nil
+                local Pages = 0
+                repeat
+                    local URL = "https://games.roblox.com/v1/games/"..tostring(PlaceId).."/servers/Public?sortOrder=Asc&limit=100"
+                    if Cursor and Cursor ~= "" then
+                        URL = URL.."&cursor="..HttpService:UrlEncode(Cursor)
+                    end
+                    local Body = HttpGet(URL)
+                    if not Body then
+                        break
+                    end
+                    local Success,Data = pcall(function()
+                        return HttpService:JSONDecode(Body)
+                    end)
+                    if not Success or type(Data) ~= "table" then
+                        break
+                    end
+                    for _,Server in ipairs(Data.data or {}) do
+                        local Blocked = Env.WuzzPlazaServers
+                            and Env.WuzzPlazaServers.IsBlocked
+                            and Env.WuzzPlazaServers.IsBlocked(Server.id)
+                        if Server.id
+                        and tonumber(Server.playing)
+                        and tonumber(Server.maxPlayers)
+                        and Server.playing < Server.maxPlayers
+                        and Server.id ~= game.JobId
+                        and not Blocked then
+                            table.insert(Servers,Server)
+                        end
+                    end
+                    Cursor = Data.nextPageCursor
+                    Pages += 1
+                until not Cursor or Cursor == "" or Pages >= 8
+                Shuffle(Servers)
+                return Servers
+            end
+
+            local Hopping = false
+            local HopGeneration = 0
+            local function StartHop(PlaceId,Label)
+                HopGeneration += 1
+                local Generation = HopGeneration
+                Hopping = true
+                task.spawn(function()
+                    local Tried = {}
+                    while Gui and Gui.Parent and Hopper.Parent and Hopping and Generation == HopGeneration do
+                        Status.Text = "Searching "..Label.." servers..."
+                        local Servers = GetServers(PlaceId)
+                        local Available = {}
+                        for _,Server in ipairs(Servers) do
+                            if not Tried[Server.id] then
+                                table.insert(Available,Server)
+                            end
+                        end
+                        if #Available == 0 then
+                            Tried = {}
+                            for _,Server in ipairs(Servers) do
+                                table.insert(Available,Server)
+                            end
+                        end
+                        if #Available == 0 then
+                            Status.Text = "No available servers"
+                            task.wait(1)
+                            continue
+                        end
+                        for _,Server in ipairs(Available) do
+                            if not Gui or not Gui.Parent or not Hopper.Parent or not Hopping or Generation ~= HopGeneration then
+                                return
+                            end
+                            Tried[Server.id] = true
+                            Status.Text = "Joining "..Label.."  •  "..tostring(Server.playing).."/"..tostring(Server.maxPlayers)
+                            local Failed = false
+                            local FailureConnection
+                            FailureConnection = TeleportService.TeleportInitFailed:Connect(function(Player)
+                                if Player == LP then
+                                    Failed = true
+                                end
+                            end)
+                            local Success = pcall(function()
+                                TeleportService:TeleportToPlaceInstance(PlaceId,Server.id,LP)
+                            end)
+                            if not Success then
+                                Failed = true
+                            end
+                            local Started = os.clock()
+                            while Hopper.Parent and Generation == HopGeneration and not Failed and os.clock()-Started < 5 do
+                                task.wait(0.1)
+                            end
+                            if FailureConnection then
+                                FailureConnection:Disconnect()
+                            end
+                            if Generation ~= HopGeneration then
+                                return
+                            end
+                            Status.Text = Failed and "Server failed, trying another..." or "Trying another server..."
+                            task.wait(0.25)
+                        end
+                    end
+                end)
+            end
+
+            Connect(Normal.MouseButton1Click,function()
+                StartHop(NORMAL_PLACE_ID,"Normal")
+            end)
+            Connect(Pro.MouseButton1Click,function()
+                StartHop(PRO_PLACE_ID,"Pro")
+            end)
+
+            local Dragging = false
+            local DragStart
+            local StartPosition
+            Connect(Header.InputBegan,function(Input)
+                if SavedGuiPositions.GuiLocked == true then
+                    return
+                end
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    Dragging = true
+                    DragStart = Input.Position
+                    StartPosition = Hopper.Position
+                end
+            end)
+            Connect(UserInputService.InputChanged,function(Input)
+                if Dragging and SavedGuiPositions.GuiLocked ~= true and (
+                    Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch
+                ) then
+                    local Delta = Input.Position-DragStart
+                    Hopper.Position = UDim2.new(
+                        StartPosition.X.Scale,
+                        StartPosition.X.Offset+Delta.X,
+                        StartPosition.Y.Scale,
+                        StartPosition.Y.Offset+Delta.Y
+                    )
+                end
+            end)
+            Connect(UserInputService.InputEnded,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    if Dragging then
+                        Dragging = false
+                        SavedGuiPositions.PlazaHopper = PackPosition(Hopper.Position)
+                        if SaveGuiPositions then
+                            pcall(SaveGuiPositions)
+                        end
+                    end
+                end
+            end)
+
+            task.spawn(function()
+                while Gui and Gui.Parent and Hopper.Parent do
+                    HopperStrokeGradient.Rotation = (HopperStrokeGradient.Rotation+3)%360
+                    local Pulse = (math.sin(os.clock()*2.8)+1)*0.5
+                    HopperStroke.Transparency = 0.02+Pulse*0.15
+                    task.wait(0.06)
+                end
+            end)
+        end
 
         local StatsService = game:GetService("Stats")
         local PerfFrames = 0
@@ -689,19 +1041,18 @@ do
 
         task.spawn(function()
             while Gui and Gui.Parent and TopBar.Parent do
-                TopBarStrokeGradient.Rotation = (TopBarStrokeGradient.Rotation+3) % 360
-                SettingsStrokeGradient.Rotation = (SettingsStrokeGradient.Rotation+3) % 360
-                TopTitleGradient.Rotation = (TopTitleGradient.Rotation+2) % 360
-                local Pulse = (math.sin(os.clock()*3.0)+1)*0.5
+                TopBarStrokeGradient.Rotation = (TopBarStrokeGradient.Rotation+3)%360
+                SettingsStrokeGradient.Rotation = (SettingsStrokeGradient.Rotation+3)%360
+                TopTitleGradient.Rotation = (TopTitleGradient.Rotation+2)%360
+                local Pulse = (math.sin(os.clock()*3)+1)*0.5
                 TopBarStroke.Transparency = 0.02+Pulse*0.14
                 TopLogoStroke.Transparency = 0.04+Pulse*0.24
                 task.wait(0.06)
             end
         end)
 
-        RefreshScaleControls()
         RefreshLockButton()
-        ApplyScale(GuiScale,false)
+        CreatePlazaHopper()
     end
 
     CreateWuzzControlBar()
@@ -2989,7 +3340,18 @@ local function ProjectBaseViewerPoint(WorldPosition)
     if not BaseViewerViewport or not BaseViewerCamera then
         return nil
     end
-    local Size = BaseViewerViewport.AbsoluteSize
+    local WindowScale = 1
+    if BaseViewerFrame then
+        local ScaleObject = BaseViewerFrame:FindFirstChild("WuzzWindowScale")
+        if ScaleObject and ScaleObject:IsA("UIScale") then
+            WindowScale = math.max(tonumber(ScaleObject.Scale) or 1,0.001)
+        end
+    end
+    -- AbsoluteSize already includes UIScale. Slot markers use local offsets that
+    -- are scaled again with the window, so project in the viewport's unscaled
+    -- local coordinate space to keep every number pinned to its podium.
+    local AbsoluteSize = BaseViewerViewport.AbsoluteSize
+    local Size = Vector2.new(AbsoluteSize.X/WindowScale,AbsoluteSize.Y/WindowScale)
     if Size.X <= 0 or Size.Y <= 0 then
         return nil
     end
