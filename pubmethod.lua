@@ -1,0 +1,4706 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+local LP = Players.LocalPlayer
+local Env = getgenv and getgenv() or _G
+do
+    local PLAZA_SERVER_FILE = "PLAZASERVERS.json"
+    local PLAZA_SERVER_BLOCK_SECONDS = 10 * 60
+    local History = {servers = {}}
+
+    local function Save()
+        if type(writefile) ~= "function" then
+            return false
+        end
+        local Ok,Encoded = pcall(function()
+            return HttpService:JSONEncode(History)
+        end)
+        if not Ok then
+            return false
+        end
+        return pcall(function()
+            writefile(PLAZA_SERVER_FILE,Encoded)
+        end)
+    end
+
+    local function Prune()
+        if type(History) ~= "table" then
+            History = {servers = {}}
+        end
+        if type(History.servers) ~= "table" then
+            History.servers = {}
+        end
+
+        local Now = os.time()
+        local Changed = false
+        for JobId,Entry in pairs(History.servers) do
+            local Timestamp = type(Entry) == "table" and tonumber(Entry.timestamp) or tonumber(Entry)
+            local ExpiresAt = type(Entry) == "table" and tonumber(Entry.expiresAt)
+                or (Timestamp and (Timestamp + PLAZA_SERVER_BLOCK_SECONDS))
+            if not Timestamp or not ExpiresAt or Now >= ExpiresAt then
+                History.servers[JobId] = nil
+                Changed = true
+            end
+        end
+        if Changed then
+            Save()
+        end
+    end
+
+    local function Load()
+        History = {servers = {}}
+        if type(isfile) == "function" and type(readfile) == "function" then
+            local ExistsOk,Exists = pcall(function()
+                return isfile(PLAZA_SERVER_FILE)
+            end)
+            if ExistsOk and Exists then
+                local ReadOk,Contents = pcall(function()
+                    return readfile(PLAZA_SERVER_FILE)
+                end)
+                if ReadOk and type(Contents) == "string" and Contents ~= "" then
+                    local DecodeOk,Data = pcall(function()
+                        return HttpService:JSONDecode(Contents)
+                    end)
+                    if DecodeOk and type(Data) == "table" and type(Data.servers) == "table" then
+                        History = Data
+                    end
+                end
+            end
+        end
+        Prune()
+        Save()
+    end
+
+    local function MarkVisited(JobId,PlaceId)
+        if not JobId or JobId == "" then
+            return
+        end
+        local Now = os.time()
+        History.servers[tostring(JobId)] = {
+            jobId = tostring(JobId),
+            placeId = tonumber(PlaceId) or game.PlaceId,
+            timestamp = Now,
+            expiresAt = Now + PLAZA_SERVER_BLOCK_SECONDS
+        }
+        Save()
+    end
+
+    local function IsBlocked(JobId)
+        if not JobId or JobId == "" then
+            return false
+        end
+        Prune()
+        local Entry = History.servers[tostring(JobId)]
+        if not Entry then
+            return false
+        end
+        local Timestamp = type(Entry) == "table" and tonumber(Entry.timestamp) or tonumber(Entry)
+        local ExpiresAt = type(Entry) == "table" and tonumber(Entry.expiresAt)
+            or (Timestamp and (Timestamp + PLAZA_SERVER_BLOCK_SECONDS))
+        return ExpiresAt ~= nil and os.time() < ExpiresAt
+    end
+
+    Load()
+    MarkVisited(game.JobId,game.PlaceId)
+
+    Env.WuzzPlazaServers = {
+        File = PLAZA_SERVER_FILE,
+        BlockSeconds = PLAZA_SERVER_BLOCK_SECONDS,
+        MarkVisited = MarkVisited,
+        IsBlocked = IsBlocked,
+        Prune = Prune,
+        GetHistory = function()
+            Prune()
+            return History
+        end
+    }
+end
+if Env.WuzzConvincerCleanup then
+    pcall(Env.WuzzConvincerCleanup)
+end
+local Connections = {}
+local Gui
+local Trading = false
+local ClearSelectedBaseESP
+local BaseViewerFrame
+local AutoMessageFrame
+local AutoMessageEditor
+local FrienderFrame
+local SaveGuiPositions
+local function Connect(signal, callback)
+    local c = signal:Connect(callback)
+    table.insert(Connections, c)
+    return c
+end
+local function Cleanup()
+    if SaveGuiPositions then
+        pcall(SaveGuiPositions)
+    end
+    for _, c in ipairs(Connections) do
+        pcall(function()
+            c:Disconnect()
+        end)
+    end
+    Connections = {}
+    if ClearSelectedBaseESP then
+        pcall(ClearSelectedBaseESP)
+    end
+    if Gui then
+        pcall(function()
+            Gui:Destroy()
+        end)
+    end
+end
+Env.WuzzConvincerCleanup = Cleanup
+local Parent = LP:WaitForChild("PlayerGui")
+pcall(function()
+    if gethui then
+        Parent = gethui()
+    end
+end)
+local Old = Parent:FindFirstChild("WuzzConvincer")
+if Old then
+    Old:Destroy()
+end
+Gui = Instance.new("ScreenGui")
+Gui.Name = "WuzzConvincer"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = Parent
+local GuiPositionFile = "wuzz_gui_positions.json"
+local SavedGuiPositions = {}
+pcall(function()
+    if isfile and readfile and isfile(GuiPositionFile) then
+        local Data = HttpService:JSONDecode(readfile(GuiPositionFile))
+        if type(Data) == "table" then
+            SavedGuiPositions = Data
+        end
+    end
+end)
+local function SavedPosition(Key,Default)
+    local Data = SavedGuiPositions[Key]
+    if type(Data) == "table"
+    and type(Data.XScale) == "number"
+    and type(Data.XOffset) == "number"
+    and type(Data.YScale) == "number"
+    and type(Data.YOffset) == "number" then
+        return UDim2.new(Data.XScale,Data.XOffset,Data.YScale,Data.YOffset)
+    end
+    return Default
+end
+local function PackPosition(Position)
+    return {
+        XScale = Position.X.Scale,
+        XOffset = Position.X.Offset,
+        YScale = Position.Y.Scale,
+        YOffset = Position.Y.Offset
+    }
+end
+local Main = Instance.new("Frame")
+Main.Name = "MainWindow"
+Main.Size = UDim2.fromOffset(365,500)
+Main.Position = SavedPosition("Main",UDim2.new(1,-390,0.5,-250))
+Main.BackgroundColor3 = Color3.fromRGB(10,7,17)
+Main.BorderSizePixel = 0
+Main.ClipsDescendants = true
+Main.Active = true
+Main.Parent = Gui
+SaveGuiPositions = function()
+    SavedGuiPositions.Main = PackPosition(Main.Position)
+    if BaseViewerFrame and BaseViewerFrame.Parent then
+        SavedGuiPositions.BaseViewer = PackPosition(BaseViewerFrame.Position)
+    end
+    if AutoMessageFrame and AutoMessageFrame.Parent then
+        SavedGuiPositions.AutoMessage = PackPosition(AutoMessageFrame.Position)
+    end
+    if AutoMessageEditor and AutoMessageEditor.Parent then
+        SavedGuiPositions.AutoMessageText = tostring(AutoMessageEditor.Text or "")
+    end
+    if FrienderFrame and FrienderFrame.Parent then
+        SavedGuiPositions.Friender = PackPosition(FrienderFrame.Position)
+    end
+    local PlazaHopper = Gui and Gui:FindFirstChild("WuzzPlazaHopper")
+    if PlazaHopper and PlazaHopper:IsA("GuiObject") then
+        SavedGuiPositions.PlazaHopper = PackPosition(PlazaHopper.Position)
+    end
+    if writefile then
+        pcall(function()
+            writefile(GuiPositionFile,HttpService:JSONEncode(SavedGuiPositions))
+        end)
+    end
+end
+
+do
+    local function CreateWuzzControlBar()
+        local SCALE_MIN = 0.60
+        local SCALE_MAX = 1.50
+        local OldGlobalScale = math.clamp(tonumber(SavedGuiPositions.GuiScale) or 1, SCALE_MIN, SCALE_MAX)
+        if type(SavedGuiPositions.GuiScales) ~= "table" then
+            SavedGuiPositions.GuiScales = {}
+        end
+        local ScaleValues = SavedGuiPositions.GuiScales
+        local ScaleDefaults = {
+            Main = OldGlobalScale,
+            Friender = OldGlobalScale,
+            AutoMessage = OldGlobalScale,
+            BaseViewer = OldGlobalScale,
+            PlazaHopper = OldGlobalScale
+        }
+        for Key,Default in pairs(ScaleDefaults) do
+            ScaleValues[Key] = math.clamp(tonumber(ScaleValues[Key]) or Default,SCALE_MIN,SCALE_MAX)
+        end
+        SavedGuiPositions.GuiScale = nil
+        SavedGuiPositions.GuiLocked = SavedGuiPositions.GuiLocked == true
+
+        local function GetScaleKey(Object)
+            if Object == Main then
+                return "Main"
+            end
+            if not Object then
+                return nil
+            end
+            if Object.Name == "WuzzFriender" then
+                return "Friender"
+            elseif Object.Name == "AutoMessageWindow" then
+                return "AutoMessage"
+            elseif Object.Name == "LastTradeBaseViewer" then
+                return "BaseViewer"
+            elseif Object.Name == "WuzzPlazaHopper" then
+                return "PlazaHopper"
+            end
+            return nil
+        end
+
+        local function ApplyObjectScale(Object)
+            local Key = GetScaleKey(Object)
+            if not Key or not Object:IsA("GuiObject") then
+                return
+            end
+            local Scale = Object:FindFirstChild("WuzzWindowScale")
+            if not Scale then
+                Scale = Instance.new("UIScale")
+                Scale.Name = "WuzzWindowScale"
+                Scale.Parent = Object
+            end
+            Scale.Scale = ScaleValues[Key] or 1
+        end
+
+        local function ApplyScale(Key,Value,ShouldSave)
+            ScaleValues[Key] = math.clamp(tonumber(Value) or ScaleValues[Key] or 1,SCALE_MIN,SCALE_MAX)
+            SavedGuiPositions.GuiScales = ScaleValues
+            for _,Object in ipairs(Gui:GetChildren()) do
+                if GetScaleKey(Object) == Key then
+                    ApplyObjectScale(Object)
+                end
+            end
+            if ShouldSave ~= false and SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end
+
+        for _,Object in ipairs(Gui:GetChildren()) do
+            ApplyObjectScale(Object)
+        end
+        Connect(Gui.ChildAdded,function(Object)
+            task.spawn(function()
+                task.wait()
+                if Object and Object.Parent == Gui then
+                    ApplyObjectScale(Object)
+                end
+            end)
+        end)
+
+        local TopBar = Instance.new("Frame")
+        TopBar.Name = "WuzzTopBar"
+        TopBar.AnchorPoint = Vector2.new(0.5,0)
+        TopBar.Size = UDim2.fromOffset(610,54)
+        TopBar.Position = UDim2.new(0.5,0,0,14)
+        TopBar.BackgroundColor3 = Color3.fromRGB(11,7,18)
+        TopBar.BorderSizePixel = 0
+        TopBar.ClipsDescendants = false
+        TopBar.Active = true
+        TopBar.ZIndex = 100
+        TopBar.Parent = Gui
+
+        local TopBarCorner = Instance.new("UICorner")
+        TopBarCorner.CornerRadius = UDim.new(0,18)
+        TopBarCorner.Parent = TopBar
+        local TopBarStroke = Instance.new("UIStroke")
+        TopBarStroke.Thickness = 2
+        TopBarStroke.Color = Color3.fromRGB(190,80,255)
+        TopBarStroke.Transparency = 0.04
+        TopBarStroke.Parent = TopBar
+        local TopBarStrokeGradient = Instance.new("UIGradient")
+        TopBarStrokeGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(92,30,190)),
+            ColorSequenceKeypoint.new(0.25,Color3.fromRGB(230,100,255)),
+            ColorSequenceKeypoint.new(0.5,Color3.fromRGB(130,45,245)),
+            ColorSequenceKeypoint.new(0.75,Color3.fromRGB(240,125,255)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(92,30,190))
+        })
+        TopBarStrokeGradient.Parent = TopBarStroke
+        local TopBarGradient = Instance.new("UIGradient")
+        TopBarGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(31,12,49)),
+            ColorSequenceKeypoint.new(0.5,Color3.fromRGB(12,7,20)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(34,11,52))
+        })
+        TopBarGradient.Rotation = 16
+        TopBarGradient.Parent = TopBar
+
+        local TopParticles = Instance.new("Frame")
+        TopParticles.Name = "Particles"
+        TopParticles.Size = UDim2.fromScale(1,1)
+        TopParticles.BackgroundTransparency = 1
+        TopParticles.ClipsDescendants = true
+        TopParticles.ZIndex = 101
+        TopParticles.Parent = TopBar
+        for _ = 1,11 do
+            local P = Instance.new("Frame")
+            local S = math.random(2,4)
+            P.Size = UDim2.fromOffset(S,S)
+            P.Position = UDim2.new(math.random(),0,math.random(),0)
+            P.BackgroundColor3 = Color3.fromRGB(math.random(150,215),math.random(55,115),255)
+            P.BackgroundTransparency = 0.46
+            P.BorderSizePixel = 0
+            P.ZIndex = 101
+            P.Parent = TopParticles
+            local PCorner = Instance.new("UICorner")
+            PCorner.CornerRadius = UDim.new(1,0)
+            PCorner.Parent = P
+            task.spawn(function()
+                while Gui and Gui.Parent and P.Parent do
+                    P.Position = UDim2.new(-0.03,0,math.random(),0)
+                    P.BackgroundTransparency = 0.48
+                    local T = TweenService:Create(P,TweenInfo.new(math.random(5,9),Enum.EasingStyle.Linear),{
+                        Position = UDim2.new(1.03,0,math.random(),0),
+                        BackgroundTransparency = 1
+                    })
+                    T:Play()
+                    T.Completed:Wait()
+                end
+            end)
+        end
+
+        local TopLogo = Instance.new("Frame")
+        TopLogo.Size = UDim2.fromOffset(36,36)
+        TopLogo.Position = UDim2.fromOffset(10,9)
+        TopLogo.BackgroundColor3 = Color3.fromRGB(80,29,128)
+        TopLogo.BorderSizePixel = 0
+        TopLogo.ZIndex = 104
+        TopLogo.Parent = TopBar
+        local TopLogoCorner = Instance.new("UICorner")
+        TopLogoCorner.CornerRadius = UDim.new(0,11)
+        TopLogoCorner.Parent = TopLogo
+        local TopLogoStroke = Instance.new("UIStroke")
+        TopLogoStroke.Thickness = 1.5
+        TopLogoStroke.Color = Color3.fromRGB(205,98,255)
+        TopLogoStroke.Transparency = 0.08
+        TopLogoStroke.Parent = TopLogo
+        local TopLogoText = Instance.new("TextLabel")
+        TopLogoText.Size = UDim2.fromScale(1,1)
+        TopLogoText.BackgroundTransparency = 1
+        TopLogoText.Text = "W"
+        TopLogoText.TextColor3 = Color3.fromRGB(246,205,255)
+        TopLogoText.Font = Enum.Font.GothamBlack
+        TopLogoText.TextSize = 19
+        TopLogoText.ZIndex = 105
+        TopLogoText.Parent = TopLogo
+
+        local TopTitle = Instance.new("TextLabel")
+        TopTitle.Size = UDim2.fromOffset(248,32)
+        TopTitle.Position = UDim2.fromOffset(57,11)
+        TopTitle.BackgroundTransparency = 1
+        TopTitle.Text = "Wuzz Pub Method"
+        TopTitle.TextColor3 = Color3.fromRGB(255,255,255)
+        TopTitle.Font = Enum.Font.GothamBold
+        TopTitle.TextSize = 17
+        TopTitle.TextXAlignment = Enum.TextXAlignment.Left
+        TopTitle.ZIndex = 104
+        TopTitle.Parent = TopBar
+        local TopTitleGradient = Instance.new("UIGradient")
+        TopTitleGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,Color3.fromRGB(150,72,255)),
+            ColorSequenceKeypoint.new(0.32,Color3.fromRGB(240,160,255)),
+            ColorSequenceKeypoint.new(0.66,Color3.fromRGB(188,80,255)),
+            ColorSequenceKeypoint.new(1,Color3.fromRGB(112,42,230))
+        })
+        TopTitleGradient.Parent = TopTitle
+
+        local PerfText = Instance.new("TextLabel")
+        PerfText.Size = UDim2.fromOffset(200,30)
+        PerfText.Position = UDim2.new(1,-258,0,12)
+        PerfText.BackgroundTransparency = 1
+        PerfText.Text = "-- FPS  •  -- ms"
+        PerfText.TextColor3 = Color3.fromRGB(193,171,211)
+        PerfText.Font = Enum.Font.GothamMedium
+        PerfText.TextSize = 11
+        PerfText.TextXAlignment = Enum.TextXAlignment.Right
+        PerfText.ZIndex = 104
+        PerfText.Parent = TopBar
+
+        local Gear = Instance.new("TextButton")
+        Gear.Name = "Settings"
+        Gear.Size = UDim2.fromOffset(38,38)
+        Gear.Position = UDim2.new(1,-47,0,8)
+        Gear.BackgroundColor3 = Color3.fromRGB(47,24,67)
+        Gear.BorderSizePixel = 0
+        Gear.Text = "⚙"
+        Gear.TextColor3 = Color3.fromRGB(232,183,255)
+        Gear.Font = Enum.Font.GothamBold
+        Gear.TextSize = 20
+        Gear.AutoButtonColor = false
+        Gear.ZIndex = 106
+        Gear.Parent = TopBar
+        local GearCorner = Instance.new("UICorner")
+        GearCorner.CornerRadius = UDim.new(0,11)
+        GearCorner.Parent = Gear
+        local GearStroke = Instance.new("UIStroke")
+        GearStroke.Color = Color3.fromRGB(161,72,225)
+        GearStroke.Transparency = 0.2
+        GearStroke.Parent = Gear
+
+        local SettingsPanel = Instance.new("Frame")
+        SettingsPanel.Name = "SettingsDropdown"
+        SettingsPanel.Size = UDim2.fromOffset(610,0)
+        SettingsPanel.Position = UDim2.fromOffset(0,62)
+        SettingsPanel.BackgroundColor3 = Color3.fromRGB(12,8,20)
+        SettingsPanel.BackgroundTransparency = 1
+        SettingsPanel.BorderSizePixel = 0
+        SettingsPanel.ClipsDescendants = true
+        SettingsPanel.ZIndex = 98
+        SettingsPanel.Parent = TopBar
+        local SettingsCorner = Instance.new("UICorner")
+        SettingsCorner.CornerRadius = UDim.new(0,16)
+        SettingsCorner.Parent = SettingsPanel
+        local SettingsStroke = Instance.new("UIStroke")
+        SettingsStroke.Thickness = 1.5
+        SettingsStroke.Color = Color3.fromRGB(170,72,240)
+        SettingsStroke.Transparency = 1
+        SettingsStroke.Parent = SettingsPanel
+        local SettingsStrokeGradient = Instance.new("UIGradient")
+        SettingsStrokeGradient.Color = TopBarStrokeGradient.Color
+        SettingsStrokeGradient.Parent = SettingsStroke
+
+        local Rows = {}
+        local ActiveSlider = nil
+        local RowDefinitions = {
+            {Key="Main",Label="MAIN"},
+            {Key="Friender",Label="FRIENDER"},
+            {Key="AutoMessage",Label="AUTO MESSAGE"},
+            {Key="BaseViewer",Label="BASE PREVIEW"},
+            {Key="PlazaHopper",Label="PLAZA HOPPER"}
+        }
+
+        local function RefreshRow(Key)
+            local Row = Rows[Key]
+            if not Row then
+                return
+            end
+            local Value = ScaleValues[Key] or 1
+            local Alpha = math.clamp((Value-SCALE_MIN)/(SCALE_MAX-SCALE_MIN),0,1)
+            Row.Fill.Size = UDim2.new(Alpha,0,1,0)
+            Row.Knob.Position = UDim2.new(Alpha,0,0.5,0)
+            Row.Box.Text = tostring(math.floor(Value*100+0.5)).."%"
+        end
+
+        local function ApplyTextScale(Key)
+            local Row = Rows[Key]
+            if not Row then
+                return
+            end
+            local Raw = tostring(Row.Box.Text or "")
+            local HasPercent = string.find(Raw,"%%",1,false) ~= nil
+            local Number = tonumber((Raw:gsub("[^%d%.%-]","")))
+            if not Number then
+                RefreshRow(Key)
+                return
+            end
+            if HasPercent or math.abs(Number) > 3 then
+                Number = Number/100
+            end
+            ApplyScale(Key,Number,true)
+            RefreshRow(Key)
+        end
+
+        local function ApplySliderScale(Key,Track,ScreenX,ShouldSave)
+            local Alpha = (ScreenX-Track.AbsolutePosition.X)/math.max(Track.AbsoluteSize.X,1)
+            Alpha = math.clamp(Alpha,0,1)
+            ApplyScale(Key,SCALE_MIN+(SCALE_MAX-SCALE_MIN)*Alpha,ShouldSave)
+            RefreshRow(Key)
+        end
+
+        for Index,Definition in ipairs(RowDefinitions) do
+            local Y = 12+(Index-1)*38
+            local Label = Instance.new("TextLabel")
+            Label.Size = UDim2.fromOffset(124,30)
+            Label.Position = UDim2.fromOffset(16,Y)
+            Label.BackgroundTransparency = 1
+            Label.Text = Definition.Label
+            Label.TextColor3 = Color3.fromRGB(205,180,224)
+            Label.Font = Enum.Font.GothamBold
+            Label.TextSize = 10
+            Label.TextXAlignment = Enum.TextXAlignment.Left
+            Label.ZIndex = 101
+            Label.Parent = SettingsPanel
+
+            local Track = Instance.new("Frame")
+            Track.Size = UDim2.fromOffset(315,8)
+            Track.Position = UDim2.fromOffset(147,Y+11)
+            Track.BackgroundColor3 = Color3.fromRGB(42,26,57)
+            Track.BorderSizePixel = 0
+            Track.Active = true
+            Track.ZIndex = 102
+            Track.Parent = SettingsPanel
+            local TrackCorner = Instance.new("UICorner")
+            TrackCorner.CornerRadius = UDim.new(1,0)
+            TrackCorner.Parent = Track
+            local Fill = Instance.new("Frame")
+            Fill.Size = UDim2.new(0,0,1,0)
+            Fill.BackgroundColor3 = Color3.fromRGB(176,76,255)
+            Fill.BorderSizePixel = 0
+            Fill.ZIndex = 102
+            Fill.Parent = Track
+            local FillCorner = Instance.new("UICorner")
+            FillCorner.CornerRadius = UDim.new(1,0)
+            FillCorner.Parent = Fill
+            local FillGradient = Instance.new("UIGradient")
+            FillGradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,Color3.fromRGB(117,46,215)),
+                ColorSequenceKeypoint.new(1,Color3.fromRGB(228,112,255))
+            })
+            FillGradient.Parent = Fill
+            local Knob = Instance.new("Frame")
+            Knob.AnchorPoint = Vector2.new(0.5,0.5)
+            Knob.Size = UDim2.fromOffset(16,16)
+            Knob.Position = UDim2.new(0,0,0.5,0)
+            Knob.BackgroundColor3 = Color3.fromRGB(235,177,255)
+            Knob.BorderSizePixel = 0
+            Knob.Active = true
+            Knob.ZIndex = 103
+            Knob.Parent = Track
+            local KnobCorner = Instance.new("UICorner")
+            KnobCorner.CornerRadius = UDim.new(1,0)
+            KnobCorner.Parent = Knob
+            local Box = Instance.new("TextBox")
+            Box.Size = UDim2.fromOffset(72,30)
+            Box.Position = UDim2.fromOffset(478,Y)
+            Box.BackgroundColor3 = Color3.fromRGB(31,18,44)
+            Box.BorderSizePixel = 0
+            Box.ClearTextOnFocus = false
+            Box.TextColor3 = Color3.fromRGB(246,233,255)
+            Box.Font = Enum.Font.GothamBold
+            Box.TextSize = 10
+            Box.ZIndex = 102
+            Box.Parent = SettingsPanel
+            local BoxCorner = Instance.new("UICorner")
+            BoxCorner.CornerRadius = UDim.new(0,9)
+            BoxCorner.Parent = Box
+            local BoxStroke = Instance.new("UIStroke")
+            BoxStroke.Color = Color3.fromRGB(132,57,192)
+            BoxStroke.Transparency = 0.35
+            BoxStroke.Parent = Box
+
+            Rows[Definition.Key] = {Track=Track,Fill=Fill,Knob=Knob,Box=Box}
+            Connect(Box.FocusLost,function()
+                ApplyTextScale(Definition.Key)
+            end)
+            Connect(Track.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    ActiveSlider = {Key=Definition.Key,Track=Track}
+                    ApplySliderScale(Definition.Key,Track,Input.Position.X,false)
+                end
+            end)
+            Connect(Knob.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    ActiveSlider = {Key=Definition.Key,Track=Track}
+                end
+            end)
+            RefreshRow(Definition.Key)
+        end
+
+        local LockButton = Instance.new("TextButton")
+        LockButton.Size = UDim2.fromOffset(170,34)
+        LockButton.Position = UDim2.new(1,-186,0,208)
+        LockButton.BackgroundColor3 = Color3.fromRGB(74,31,112)
+        LockButton.BorderSizePixel = 0
+        LockButton.TextColor3 = Color3.fromRGB(255,242,255)
+        LockButton.Font = Enum.Font.GothamBold
+        LockButton.TextSize = 10
+        LockButton.AutoButtonColor = false
+        LockButton.ZIndex = 102
+        LockButton.Parent = SettingsPanel
+        local LockCorner = Instance.new("UICorner")
+        LockCorner.CornerRadius = UDim.new(0,10)
+        LockCorner.Parent = LockButton
+        local LockStroke = Instance.new("UIStroke")
+        LockStroke.Color = Color3.fromRGB(185,89,248)
+        LockStroke.Transparency = 0.25
+        LockStroke.Parent = LockButton
+
+        local SettingsOpen = false
+        local function RefreshLockButton()
+            if SavedGuiPositions.GuiLocked == true then
+                LockButton.Text = "GUI LOCK  •  ON"
+                LockButton.BackgroundColor3 = Color3.fromRGB(132,49,205)
+                LockStroke.Transparency = 0.04
+            else
+                LockButton.Text = "GUI LOCK  •  OFF"
+                LockButton.BackgroundColor3 = Color3.fromRGB(74,31,112)
+                LockStroke.Transparency = 0.25
+            end
+        end
+        local function SetSettingsOpen(State)
+            SettingsOpen = State == true
+            local TargetSize = SettingsOpen and UDim2.fromOffset(610,254) or UDim2.fromOffset(610,0)
+            TweenService:Create(SettingsPanel,TweenInfo.new(0.24,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
+                Size = TargetSize,
+                BackgroundTransparency = SettingsOpen and 0.03 or 1
+            }):Play()
+            TweenService:Create(SettingsStroke,TweenInfo.new(0.18),{
+                Transparency = SettingsOpen and 0.10 or 1
+            }):Play()
+            TweenService:Create(Gear,TweenInfo.new(0.24,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
+                Rotation = SettingsOpen and 48 or 0
+            }):Play()
+        end
+
+        Connect(Gear.MouseEnter,function()
+            TweenService:Create(Gear,TweenInfo.new(0.12),{BackgroundColor3 = Color3.fromRGB(72,31,100)}):Play()
+            TweenService:Create(GearStroke,TweenInfo.new(0.12),{Transparency = 0.02}):Play()
+        end)
+        Connect(Gear.MouseLeave,function()
+            TweenService:Create(Gear,TweenInfo.new(0.12),{BackgroundColor3 = Color3.fromRGB(47,24,67)}):Play()
+            TweenService:Create(GearStroke,TweenInfo.new(0.12),{Transparency = 0.2}):Play()
+        end)
+        Connect(Gear.MouseButton1Click,function()
+            SetSettingsOpen(not SettingsOpen)
+        end)
+        Connect(LockButton.MouseButton1Click,function()
+            SavedGuiPositions.GuiLocked = not (SavedGuiPositions.GuiLocked == true)
+            RefreshLockButton()
+            if SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end)
+        Connect(UserInputService.InputChanged,function(Input)
+            if ActiveSlider and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+                ApplySliderScale(ActiveSlider.Key,ActiveSlider.Track,Input.Position.X,false)
+            end
+        end)
+        Connect(UserInputService.InputEnded,function(Input)
+            if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                if ActiveSlider then
+                    ActiveSlider = nil
+                    if SaveGuiPositions then
+                        pcall(SaveGuiPositions)
+                    end
+                end
+            end
+        end)
+
+        local function CreatePlazaHopper()
+            local TeleportService = game:GetService("TeleportService")
+            local NORMAL_PLACE_ID = 78906538690694
+            local PRO_PLACE_ID = 119594317142884
+            local Hopper = Instance.new("Frame")
+            Hopper.Name = "WuzzPlazaHopper"
+            Hopper.Size = UDim2.fromOffset(330,174)
+            Hopper.Position = SavedPosition("PlazaHopper",UDim2.new(0,24,0.5,-87))
+            Hopper.BackgroundColor3 = Color3.fromRGB(10,7,17)
+            Hopper.BorderSizePixel = 0
+            Hopper.ClipsDescendants = true
+            Hopper.Active = true
+            Hopper.ZIndex = 40
+            Hopper.Parent = Gui
+            ApplyObjectScale(Hopper)
+
+            local HopperCorner = Instance.new("UICorner")
+            HopperCorner.CornerRadius = UDim.new(0,16)
+            HopperCorner.Parent = Hopper
+            local HopperStroke = Instance.new("UIStroke")
+            HopperStroke.Thickness = 2
+            HopperStroke.Color = Color3.fromRGB(180,70,255)
+            HopperStroke.Parent = Hopper
+            local HopperStrokeGradient = Instance.new("UIGradient")
+            HopperStrokeGradient.Color = TopBarStrokeGradient.Color
+            HopperStrokeGradient.Parent = HopperStroke
+            local HopperBG = Instance.new("UIGradient")
+            HopperBG.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,Color3.fromRGB(29,10,47)),
+                ColorSequenceKeypoint.new(0.5,Color3.fromRGB(11,7,18)),
+                ColorSequenceKeypoint.new(1,Color3.fromRGB(32,10,50))
+            })
+            HopperBG.Rotation = 30
+            HopperBG.Parent = Hopper
+
+            local Header = Instance.new("Frame")
+            Header.Size = UDim2.new(1,0,0,58)
+            Header.BackgroundTransparency = 1
+            Header.Active = true
+            Header.ZIndex = 42
+            Header.Parent = Hopper
+            local Logo = Instance.new("Frame")
+            Logo.Size = UDim2.fromOffset(36,36)
+            Logo.Position = UDim2.fromOffset(12,11)
+            Logo.BackgroundColor3 = Color3.fromRGB(78,29,126)
+            Logo.BorderSizePixel = 0
+            Logo.ZIndex = 43
+            Logo.Parent = Header
+            local LogoCorner = Instance.new("UICorner")
+            LogoCorner.CornerRadius = UDim.new(0,10)
+            LogoCorner.Parent = Logo
+            local LogoText = Instance.new("TextLabel")
+            LogoText.Size = UDim2.fromScale(1,1)
+            LogoText.BackgroundTransparency = 1
+            LogoText.Text = "W"
+            LogoText.TextColor3 = Color3.fromRGB(240,195,255)
+            LogoText.Font = Enum.Font.GothamBlack
+            LogoText.TextSize = 18
+            LogoText.ZIndex = 44
+            LogoText.Parent = Logo
+            local Title = Instance.new("TextLabel")
+            Title.Size = UDim2.new(1,-72,0,24)
+            Title.Position = UDim2.fromOffset(59,8)
+            Title.BackgroundTransparency = 1
+            Title.Text = "Plaza Hopper"
+            Title.TextColor3 = Color3.fromRGB(250,240,255)
+            Title.Font = Enum.Font.GothamBold
+            Title.TextSize = 16
+            Title.TextXAlignment = Enum.TextXAlignment.Left
+            Title.ZIndex = 43
+            Title.Parent = Header
+            local Status = Instance.new("TextLabel")
+            Status.Size = UDim2.new(1,-72,0,17)
+            Status.Position = UDim2.fromOffset(59,31)
+            Status.BackgroundTransparency = 1
+            Status.Text = "Choose a server"
+            Status.TextColor3 = Color3.fromRGB(166,143,183)
+            Status.Font = Enum.Font.GothamMedium
+            Status.TextSize = 9
+            Status.TextXAlignment = Enum.TextXAlignment.Left
+            Status.TextTruncate = Enum.TextTruncate.AtEnd
+            Status.ZIndex = 43
+            Status.Parent = Header
+
+            local function MakeButton(Text,X)
+                local Button = Instance.new("TextButton")
+                Button.Size = UDim2.fromOffset(145,40)
+                Button.Position = UDim2.fromOffset(X,75)
+                Button.BackgroundColor3 = Color3.fromRGB(77,31,119)
+                Button.BorderSizePixel = 0
+                Button.Text = Text
+                Button.TextColor3 = Color3.fromRGB(255,245,255)
+                Button.Font = Enum.Font.GothamBold
+                Button.TextSize = 11
+                Button.AutoButtonColor = false
+                Button.ZIndex = 43
+                Button.Parent = Hopper
+                local Corner = Instance.new("UICorner")
+                Corner.CornerRadius = UDim.new(0,10)
+                Corner.Parent = Button
+                local Stroke = Instance.new("UIStroke")
+                Stroke.Color = Color3.fromRGB(191,91,255)
+                Stroke.Transparency = 0.2
+                Stroke.Parent = Button
+                local Gradient = Instance.new("UIGradient")
+                Gradient.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0,Color3.fromRGB(142,55,220)),
+                    ColorSequenceKeypoint.new(1,Color3.fromRGB(88,34,145))
+                })
+                Gradient.Rotation = 35
+                Gradient.Parent = Button
+                Connect(Button.MouseEnter,function()
+                    TweenService:Create(Stroke,TweenInfo.new(0.12),{Transparency=0}):Play()
+                end)
+                Connect(Button.MouseLeave,function()
+                    TweenService:Create(Stroke,TweenInfo.new(0.12),{Transparency=0.2}):Play()
+                end)
+                return Button
+            end
+
+            local Normal = MakeButton("NORMAL",13)
+            local Pro = MakeButton("PRO",172)
+
+            local MinPlayers = math.clamp(
+                math.floor(tonumber(SavedGuiPositions.PlazaMinPlayers) or 1),
+                1,
+                28
+            )
+            SavedGuiPositions.PlazaMinPlayers = MinPlayers
+
+            local MinPlayersLabel = Instance.new("TextLabel")
+            MinPlayersLabel.Size = UDim2.fromOffset(205,18)
+            MinPlayersLabel.Position = UDim2.fromOffset(13,123)
+            MinPlayersLabel.BackgroundTransparency = 1
+            MinPlayersLabel.Text = "MINIMUM PLAYERS"
+            MinPlayersLabel.TextColor3 = Color3.fromRGB(196,170,215)
+            MinPlayersLabel.Font = Enum.Font.GothamBold
+            MinPlayersLabel.TextSize = 9
+            MinPlayersLabel.TextXAlignment = Enum.TextXAlignment.Left
+            MinPlayersLabel.ZIndex = 43
+            MinPlayersLabel.Parent = Hopper
+
+            local MinPlayersValue = Instance.new("TextLabel")
+            MinPlayersValue.Size = UDim2.fromOffset(70,18)
+            MinPlayersValue.Position = UDim2.new(1,-83,0,123)
+            MinPlayersValue.BackgroundTransparency = 1
+            MinPlayersValue.TextColor3 = Color3.fromRGB(244,207,255)
+            MinPlayersValue.Font = Enum.Font.GothamBold
+            MinPlayersValue.TextSize = 10
+            MinPlayersValue.TextXAlignment = Enum.TextXAlignment.Right
+            MinPlayersValue.ZIndex = 43
+            MinPlayersValue.Parent = Hopper
+
+            local MinPlayersTrack = Instance.new("Frame")
+            MinPlayersTrack.Size = UDim2.fromOffset(304,8)
+            MinPlayersTrack.Position = UDim2.fromOffset(13,149)
+            MinPlayersTrack.BackgroundColor3 = Color3.fromRGB(43,25,58)
+            MinPlayersTrack.BorderSizePixel = 0
+            MinPlayersTrack.Active = true
+            MinPlayersTrack.ZIndex = 43
+            MinPlayersTrack.Parent = Hopper
+            local MinPlayersTrackCorner = Instance.new("UICorner")
+            MinPlayersTrackCorner.CornerRadius = UDim.new(1,0)
+            MinPlayersTrackCorner.Parent = MinPlayersTrack
+
+            local MinPlayersFill = Instance.new("Frame")
+            MinPlayersFill.Size = UDim2.new(0,0,1,0)
+            MinPlayersFill.BackgroundColor3 = Color3.fromRGB(178,76,255)
+            MinPlayersFill.BorderSizePixel = 0
+            MinPlayersFill.ZIndex = 44
+            MinPlayersFill.Parent = MinPlayersTrack
+            local MinPlayersFillCorner = Instance.new("UICorner")
+            MinPlayersFillCorner.CornerRadius = UDim.new(1,0)
+            MinPlayersFillCorner.Parent = MinPlayersFill
+            local MinPlayersGradient = Instance.new("UIGradient")
+            MinPlayersGradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,Color3.fromRGB(113,43,214)),
+                ColorSequenceKeypoint.new(1,Color3.fromRGB(231,113,255))
+            })
+            MinPlayersGradient.Parent = MinPlayersFill
+
+            local MinPlayersKnob = Instance.new("Frame")
+            MinPlayersKnob.AnchorPoint = Vector2.new(0.5,0.5)
+            MinPlayersKnob.Size = UDim2.fromOffset(16,16)
+            MinPlayersKnob.Position = UDim2.new(0,0,0.5,0)
+            MinPlayersKnob.BackgroundColor3 = Color3.fromRGB(238,180,255)
+            MinPlayersKnob.BorderSizePixel = 0
+            MinPlayersKnob.Active = true
+            MinPlayersKnob.ZIndex = 45
+            MinPlayersKnob.Parent = MinPlayersTrack
+            local MinPlayersKnobCorner = Instance.new("UICorner")
+            MinPlayersKnobCorner.CornerRadius = UDim.new(1,0)
+            MinPlayersKnobCorner.Parent = MinPlayersKnob
+
+            local MinPlayersDragging = false
+            local function RefreshMinPlayersSlider()
+                local Alpha = (MinPlayers-1)/27
+                MinPlayersFill.Size = UDim2.new(Alpha,0,1,0)
+                MinPlayersKnob.Position = UDim2.new(Alpha,0,0.5,0)
+                MinPlayersValue.Text = tostring(MinPlayers).." / 28"
+            end
+            local function SetMinPlayersFromX(ScreenX,ShouldSave)
+                local Alpha = (ScreenX-MinPlayersTrack.AbsolutePosition.X)
+                    / math.max(MinPlayersTrack.AbsoluteSize.X,1)
+                Alpha = math.clamp(Alpha,0,1)
+                MinPlayers = math.clamp(math.floor(1+(27*Alpha)+0.5),1,28)
+                SavedGuiPositions.PlazaMinPlayers = MinPlayers
+                RefreshMinPlayersSlider()
+                if ShouldSave and SaveGuiPositions then
+                    pcall(SaveGuiPositions)
+                end
+            end
+            Connect(MinPlayersTrack.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.Touch then
+                    MinPlayersDragging = true
+                    SetMinPlayersFromX(Input.Position.X,false)
+                end
+            end)
+            Connect(MinPlayersKnob.InputBegan,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.Touch then
+                    MinPlayersDragging = true
+                end
+            end)
+            Connect(UserInputService.InputChanged,function(Input)
+                if MinPlayersDragging and (
+                    Input.UserInputType == Enum.UserInputType.MouseMovement
+                    or Input.UserInputType == Enum.UserInputType.Touch
+                ) then
+                    SetMinPlayersFromX(Input.Position.X,false)
+                end
+            end)
+            Connect(UserInputService.InputEnded,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1
+                or Input.UserInputType == Enum.UserInputType.Touch then
+                    if MinPlayersDragging then
+                        MinPlayersDragging = false
+                        SavedGuiPositions.PlazaMinPlayers = MinPlayers
+                        if SaveGuiPositions then
+                            pcall(SaveGuiPositions)
+                        end
+                    end
+                end
+            end)
+            RefreshMinPlayersSlider()
+
+            local function HttpGet(URL)
+                local Success,Result = pcall(function()
+                    return game:HttpGet(URL)
+                end)
+                if Success and type(Result) == "string" then
+                    return Result
+                end
+                local Request = request or http_request or (syn and syn.request)
+                if Request then
+                    local RequestSuccess,Response = pcall(function()
+                        return Request({Url=URL,Method="GET"})
+                    end)
+                    if RequestSuccess and Response and type(Response.Body) == "string" then
+                        return Response.Body
+                    end
+                end
+                return nil
+            end
+
+            local function Shuffle(List)
+                for Index = #List,2,-1 do
+                    local RandomIndex = math.random(1,Index)
+                    List[Index],List[RandomIndex] = List[RandomIndex],List[Index]
+                end
+            end
+
+            local function GetServers(PlaceId)
+                if Env.WuzzPlazaServers and Env.WuzzPlazaServers.Prune then
+                    pcall(Env.WuzzPlazaServers.Prune)
+                end
+                local Servers = {}
+                local Cursor = nil
+                local Pages = 0
+                repeat
+                    local URL = "https://games.roblox.com/v1/games/"..tostring(PlaceId).."/servers/Public?sortOrder=Asc&limit=100"
+                    if Cursor and Cursor ~= "" then
+                        URL = URL.."&cursor="..HttpService:UrlEncode(Cursor)
+                    end
+                    local Body = HttpGet(URL)
+                    if not Body then
+                        break
+                    end
+                    local Success,Data = pcall(function()
+                        return HttpService:JSONDecode(Body)
+                    end)
+                    if not Success or type(Data) ~= "table" then
+                        break
+                    end
+                    for _,Server in ipairs(Data.data or {}) do
+                        local Blocked = Env.WuzzPlazaServers
+                            and Env.WuzzPlazaServers.IsBlocked
+                            and Env.WuzzPlazaServers.IsBlocked(Server.id)
+                        if Server.id
+                        and tonumber(Server.playing)
+                        and tonumber(Server.maxPlayers)
+                        and Server.playing >= MinPlayers
+                        and Server.playing < Server.maxPlayers
+                        and Server.id ~= game.JobId
+                        and not Blocked then
+                            table.insert(Servers,Server)
+                        end
+                    end
+                    Cursor = Data.nextPageCursor
+                    Pages += 1
+                until not Cursor or Cursor == "" or Pages >= 8
+                Shuffle(Servers)
+                return Servers
+            end
+
+            local Hopping = false
+            local HopGeneration = 0
+            local function StartHop(PlaceId,Label)
+                HopGeneration += 1
+                local Generation = HopGeneration
+                Hopping = true
+                task.spawn(function()
+                    local Tried = {}
+                    while Gui and Gui.Parent and Hopper.Parent and Hopping and Generation == HopGeneration do
+                        Status.Text = "Searching "..Label.."  •  "..tostring(MinPlayers).."+ players"
+                        local Servers = GetServers(PlaceId)
+                        local Available = {}
+                        for _,Server in ipairs(Servers) do
+                            if not Tried[Server.id] then
+                                table.insert(Available,Server)
+                            end
+                        end
+                        if #Available == 0 then
+                            Tried = {}
+                            for _,Server in ipairs(Servers) do
+                                table.insert(Available,Server)
+                            end
+                        end
+                        if #Available == 0 then
+                            Status.Text = "No servers with "..tostring(MinPlayers).."+ players"
+                            task.wait(1)
+                            continue
+                        end
+                        for _,Server in ipairs(Available) do
+                            if not Gui or not Gui.Parent or not Hopper.Parent or not Hopping or Generation ~= HopGeneration then
+                                return
+                            end
+                            Tried[Server.id] = true
+                            Status.Text = "Joining "..Label.."  •  "..tostring(Server.playing).."/"..tostring(Server.maxPlayers)
+                            local Failed = false
+                            local FailureConnection
+                            FailureConnection = TeleportService.TeleportInitFailed:Connect(function(Player)
+                                if Player == LP then
+                                    Failed = true
+                                end
+                            end)
+                            local Success = pcall(function()
+                                TeleportService:TeleportToPlaceInstance(PlaceId,Server.id,LP)
+                            end)
+                            if not Success then
+                                Failed = true
+                            end
+                            local Started = os.clock()
+                            while Hopper.Parent and Generation == HopGeneration and not Failed and os.clock()-Started < 5 do
+                                task.wait(0.1)
+                            end
+                            if FailureConnection then
+                                FailureConnection:Disconnect()
+                            end
+                            if Generation ~= HopGeneration then
+                                return
+                            end
+                            Status.Text = Failed and "Server failed, trying another..." or "Trying another server..."
+                            task.wait(0.25)
+                        end
+                    end
+                end)
+            end
+
+            Connect(Normal.MouseButton1Click,function()
+                StartHop(NORMAL_PLACE_ID,"Normal")
+            end)
+            Connect(Pro.MouseButton1Click,function()
+                StartHop(PRO_PLACE_ID,"Pro")
+            end)
+
+            local Dragging = false
+            local DragStart
+            local StartPosition
+            Connect(Header.InputBegan,function(Input)
+                if SavedGuiPositions.GuiLocked == true then
+                    return
+                end
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    Dragging = true
+                    DragStart = Input.Position
+                    StartPosition = Hopper.Position
+                end
+            end)
+            Connect(UserInputService.InputChanged,function(Input)
+                if Dragging and SavedGuiPositions.GuiLocked ~= true and (
+                    Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch
+                ) then
+                    local Delta = Input.Position-DragStart
+                    Hopper.Position = UDim2.new(
+                        StartPosition.X.Scale,
+                        StartPosition.X.Offset+Delta.X,
+                        StartPosition.Y.Scale,
+                        StartPosition.Y.Offset+Delta.Y
+                    )
+                end
+            end)
+            Connect(UserInputService.InputEnded,function(Input)
+                if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+                    if Dragging then
+                        Dragging = false
+                        SavedGuiPositions.PlazaHopper = PackPosition(Hopper.Position)
+                        if SaveGuiPositions then
+                            pcall(SaveGuiPositions)
+                        end
+                    end
+                end
+            end)
+
+            task.spawn(function()
+                while Gui and Gui.Parent and Hopper.Parent do
+                    HopperStrokeGradient.Rotation = (HopperStrokeGradient.Rotation+3)%360
+                    local Pulse = (math.sin(os.clock()*2.8)+1)*0.5
+                    HopperStroke.Transparency = 0.02+Pulse*0.15
+                    task.wait(0.06)
+                end
+            end)
+        end
+
+        local StatsService = game:GetService("Stats")
+        local PerfFrames = 0
+        local PerfLast = os.clock()
+        local CurrentFPS = 0
+        local CurrentPing = "--"
+        Connect(RunService.RenderStepped,function()
+            PerfFrames += 1
+            local Now = os.clock()
+            local Delta = Now-PerfLast
+            if Delta >= 0.5 then
+                CurrentFPS = math.floor((PerfFrames/Delta)+0.5)
+                PerfFrames = 0
+                PerfLast = Now
+                pcall(function()
+                    local Value = StatsService.Network.ServerStatsItem["Data Ping"]:GetValueString()
+                    local Number = tonumber(string.match(tostring(Value),"[%d%.]+"))
+                    if Number then
+                        CurrentPing = tostring(math.floor(Number+0.5))
+                    end
+                end)
+                PerfText.Text = tostring(CurrentFPS).." FPS  •  "..tostring(CurrentPing).." ms"
+            end
+        end)
+
+        task.spawn(function()
+            while Gui and Gui.Parent and TopBar.Parent do
+                TopBarStrokeGradient.Rotation = (TopBarStrokeGradient.Rotation+3)%360
+                SettingsStrokeGradient.Rotation = (SettingsStrokeGradient.Rotation+3)%360
+                TopTitleGradient.Rotation = (TopTitleGradient.Rotation+2)%360
+                local Pulse = (math.sin(os.clock()*3)+1)*0.5
+                TopBarStroke.Transparency = 0.02+Pulse*0.14
+                TopLogoStroke.Transparency = 0.04+Pulse*0.24
+                task.wait(0.06)
+            end
+        end)
+
+        RefreshLockButton()
+        CreatePlazaHopper()
+    end
+
+    CreateWuzzControlBar()
+end
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0,16)
+MainCorner.Parent = Main
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Thickness = 2
+MainStroke.Color = Color3.fromRGB(180,70,255)
+MainStroke.Parent = Main
+local StrokeGradient = Instance.new("UIGradient")
+StrokeGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(90,25,190)),
+    ColorSequenceKeypoint.new(0.25,Color3.fromRGB(220,100,255)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(125,40,245)),
+    ColorSequenceKeypoint.new(0.75,Color3.fromRGB(230,120,255)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(90,25,190))
+})
+StrokeGradient.Parent = MainStroke
+local BGGradient = Instance.new("UIGradient")
+BGGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(29,10,47)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(11,7,18)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(32,10,50))
+})
+BGGradient.Rotation = 32
+BGGradient.Parent = Main
+local Particles = Instance.new("Frame")
+Particles.Size = UDim2.fromScale(1,1)
+Particles.BackgroundTransparency = 1
+Particles.ClipsDescendants = true
+Particles.ZIndex = 1
+Particles.Parent = Main
+for i = 1,8 do
+    local P = Instance.new("Frame")
+    local S = math.random(2,4)
+    P.Size = UDim2.fromOffset(S,S)
+    P.Position = UDim2.new(math.random(),0,math.random(),0)
+    P.BackgroundColor3 = Color3.fromRGB(
+        math.random(145,205),
+        math.random(45,95),
+        255
+    )
+    P.BackgroundTransparency = 0.55
+    P.BorderSizePixel = 0
+    P.ZIndex = 1
+    P.Parent = Particles
+    local C = Instance.new("UICorner")
+    C.CornerRadius = UDim.new(1,0)
+    C.Parent = P
+    task.spawn(function()
+        while Gui and Gui.Parent and P.Parent do
+            P.Position = UDim2.new(math.random(),0,1.05,0)
+            P.BackgroundTransparency = 0.5
+            local T = TweenService:Create(
+                P,
+                TweenInfo.new(
+                    math.random(7,11),
+                    Enum.EasingStyle.Linear
+                ),
+                {
+                    Position = UDim2.new(math.random(),0,-0.05,0),
+                    BackgroundTransparency = 1
+                }
+            )
+            T:Play()
+            T.Completed:Wait()
+        end
+    end)
+end
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1,0,0,64)
+Header.BackgroundTransparency = 1
+Header.ZIndex = 5
+Header.Parent = Main
+local Logo = Instance.new("Frame")
+Logo.Size = UDim2.fromOffset(40,40)
+Logo.Position = UDim2.fromOffset(14,12)
+Logo.BackgroundColor3 = Color3.fromRGB(78,29,126)
+Logo.BorderSizePixel = 0
+Logo.ZIndex = 6
+Logo.Parent = Header
+local LogoCorner = Instance.new("UICorner")
+LogoCorner.CornerRadius = UDim.new(0,11)
+LogoCorner.Parent = Logo
+local LogoStroke = Instance.new("UIStroke")
+LogoStroke.Color = Color3.fromRGB(195,90,255)
+LogoStroke.Parent = Logo
+local LogoText = Instance.new("TextLabel")
+LogoText.Size = UDim2.fromScale(1,1)
+LogoText.BackgroundTransparency = 1
+LogoText.Text = "W"
+LogoText.TextColor3 = Color3.fromRGB(240,195,255)
+LogoText.Font = Enum.Font.GothamBlack
+LogoText.TextSize = 20
+LogoText.ZIndex = 7
+LogoText.Parent = Logo
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1,-120,1,0)
+Title.Position = UDim2.fromOffset(66,0)
+Title.BackgroundTransparency = 1
+Title.Text = "Wuzz Pub Method"
+Title.TextColor3 = Color3.fromRGB(250,240,255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.ZIndex = 6
+Title.Parent = Header
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.fromOffset(34,34)
+Close.Position = UDim2.new(1,-46,0,15)
+Close.BackgroundColor3 = Color3.fromRGB(46,24,66)
+Close.BorderSizePixel = 0
+Close.Text = "×"
+Close.TextColor3 = Color3.fromRGB(230,165,255)
+Close.Font = Enum.Font.GothamBold
+Close.TextSize = 21
+Close.AutoButtonColor = false
+Close.ZIndex = 7
+Close.Parent = Header
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0,9)
+CloseCorner.Parent = Close
+local CloseStroke = Instance.new("UIStroke")
+CloseStroke.Color = Color3.fromRGB(125,55,185)
+CloseStroke.Parent = Close
+local List = Instance.new("ScrollingFrame")
+List.Size = UDim2.new(1,-22,1,-76)
+List.Position = UDim2.fromOffset(11,65)
+List.BackgroundTransparency = 1
+List.BorderSizePixel = 0
+List.ScrollBarThickness = 3
+List.ScrollBarImageColor3 = Color3.fromRGB(175,75,255)
+List.AutomaticCanvasSize = Enum.AutomaticSize.Y
+List.CanvasSize = UDim2.new()
+List.ZIndex = 5
+List.Parent = Main
+local Layout = Instance.new("UIListLayout")
+Layout.Padding = UDim.new(0,8)
+Layout.SortOrder = Enum.SortOrder.LayoutOrder
+Layout.Parent = List
+
+FrienderFrame = Instance.new("Frame")
+FrienderFrame.Name = "WuzzFriender"
+FrienderFrame.Size = UDim2.fromOffset(310,360)
+FrienderFrame.Position = SavedPosition("Friender",UDim2.new(1,-1100,0.5,-180))
+FrienderFrame.BackgroundColor3 = Color3.fromRGB(10,7,17)
+FrienderFrame.BorderSizePixel = 0
+FrienderFrame.ClipsDescendants = true
+FrienderFrame.Active = true
+FrienderFrame.ZIndex = 30
+FrienderFrame.Parent = Gui
+
+local FrienderCorner = Instance.new("UICorner")
+FrienderCorner.CornerRadius = UDim.new(0,15)
+FrienderCorner.Parent = FrienderFrame
+
+local FrienderStroke = Instance.new("UIStroke")
+FrienderStroke.Thickness = 2
+FrienderStroke.Color = Color3.fromRGB(180,70,255)
+FrienderStroke.Parent = FrienderFrame
+
+local FrienderStrokeGradient = Instance.new("UIGradient")
+FrienderStrokeGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(90,25,190)),
+    ColorSequenceKeypoint.new(0.25,Color3.fromRGB(220,100,255)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(125,40,245)),
+    ColorSequenceKeypoint.new(0.75,Color3.fromRGB(230,120,255)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(90,25,190))
+})
+FrienderStrokeGradient.Parent = FrienderStroke
+
+local FrienderBGGradient = Instance.new("UIGradient")
+FrienderBGGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(29,10,47)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(11,7,18)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(32,10,50))
+})
+FrienderBGGradient.Rotation = 32
+FrienderBGGradient.Parent = FrienderFrame
+
+local FrienderParticles = Instance.new("Frame")
+FrienderParticles.Size = UDim2.fromScale(1,1)
+FrienderParticles.BackgroundTransparency = 1
+FrienderParticles.ClipsDescendants = true
+FrienderParticles.ZIndex = 31
+FrienderParticles.Parent = FrienderFrame
+
+for i = 1,7 do
+    local P = Instance.new("Frame")
+    local S = math.random(2,4)
+    P.Size = UDim2.fromOffset(S,S)
+    P.Position = UDim2.new(math.random(),0,math.random(),0)
+    P.BackgroundColor3 = Color3.fromRGB(math.random(145,205),math.random(45,95),255)
+    P.BackgroundTransparency = 0.55
+    P.BorderSizePixel = 0
+    P.ZIndex = 31
+    P.Parent = FrienderParticles
+    local C = Instance.new("UICorner")
+    C.CornerRadius = UDim.new(1,0)
+    C.Parent = P
+    task.spawn(function()
+        while Gui and Gui.Parent and P.Parent do
+            P.Position = UDim2.new(math.random(),0,1.05,0)
+            P.BackgroundTransparency = 0.5
+            local T = TweenService:Create(
+                P,
+                TweenInfo.new(math.random(6,10),Enum.EasingStyle.Linear),
+                {
+                    Position = UDim2.new(math.random(),0,-0.05,0),
+                    BackgroundTransparency = 1
+                }
+            )
+            T:Play()
+            T.Completed:Wait()
+        end
+    end)
+end
+
+local FrienderHeader = Instance.new("Frame")
+FrienderHeader.Size = UDim2.new(1,0,0,58)
+FrienderHeader.BackgroundTransparency = 1
+FrienderHeader.Active = true
+FrienderHeader.ZIndex = 33
+FrienderHeader.Parent = FrienderFrame
+
+local FrienderLogo = Instance.new("Frame")
+FrienderLogo.Size = UDim2.fromOffset(36,36)
+FrienderLogo.Position = UDim2.fromOffset(12,11)
+FrienderLogo.BackgroundColor3 = Color3.fromRGB(78,29,126)
+FrienderLogo.BorderSizePixel = 0
+FrienderLogo.ZIndex = 34
+FrienderLogo.Parent = FrienderHeader
+
+local FrienderLogoCorner = Instance.new("UICorner")
+FrienderLogoCorner.CornerRadius = UDim.new(0,10)
+FrienderLogoCorner.Parent = FrienderLogo
+
+local FrienderLogoStroke = Instance.new("UIStroke")
+FrienderLogoStroke.Color = Color3.fromRGB(195,90,255)
+FrienderLogoStroke.Transparency = 0.1
+FrienderLogoStroke.Parent = FrienderLogo
+
+local FrienderLogoText = Instance.new("TextLabel")
+FrienderLogoText.Size = UDim2.fromScale(1,1)
+FrienderLogoText.BackgroundTransparency = 1
+FrienderLogoText.Text = "W"
+FrienderLogoText.TextColor3 = Color3.fromRGB(240,195,255)
+FrienderLogoText.Font = Enum.Font.GothamBlack
+FrienderLogoText.TextSize = 18
+FrienderLogoText.ZIndex = 35
+FrienderLogoText.Parent = FrienderLogo
+
+local FrienderTitle = Instance.new("TextLabel")
+FrienderTitle.Size = UDim2.new(1,-72,1,0)
+FrienderTitle.Position = UDim2.fromOffset(60,0)
+FrienderTitle.BackgroundTransparency = 1
+FrienderTitle.Text = "Wuzz Friender"
+FrienderTitle.TextColor3 = Color3.fromRGB(250,240,255)
+FrienderTitle.Font = Enum.Font.GothamBold
+FrienderTitle.TextSize = 17
+FrienderTitle.TextXAlignment = Enum.TextXAlignment.Left
+FrienderTitle.ZIndex = 34
+FrienderTitle.Parent = FrienderHeader
+
+local FrienderDivider = Instance.new("Frame")
+FrienderDivider.Size = UDim2.new(1,-24,0,1)
+FrienderDivider.Position = UDim2.fromOffset(12,57)
+FrienderDivider.BackgroundColor3 = Color3.fromRGB(160,70,235)
+FrienderDivider.BackgroundTransparency = 0.65
+FrienderDivider.BorderSizePixel = 0
+FrienderDivider.ZIndex = 33
+FrienderDivider.Parent = FrienderFrame
+
+local FrienderSearch = Instance.new("TextBox")
+FrienderSearch.Name = "Search"
+FrienderSearch.Size = UDim2.new(1,-18,0,34)
+FrienderSearch.Position = UDim2.fromOffset(9,64)
+FrienderSearch.BackgroundColor3 = Color3.fromRGB(21,12,31)
+FrienderSearch.BackgroundTransparency = 0.04
+FrienderSearch.BorderSizePixel = 0
+FrienderSearch.ClearTextOnFocus = false
+FrienderSearch.Text = ""
+FrienderSearch.PlaceholderText = "Search display or @username..."
+FrienderSearch.PlaceholderColor3 = Color3.fromRGB(135,116,151)
+FrienderSearch.TextColor3 = Color3.fromRGB(246,235,255)
+FrienderSearch.Font = Enum.Font.GothamMedium
+FrienderSearch.TextSize = 11
+FrienderSearch.TextXAlignment = Enum.TextXAlignment.Left
+FrienderSearch.ZIndex = 34
+FrienderSearch.Parent = FrienderFrame
+
+local FrienderSearchCorner = Instance.new("UICorner")
+FrienderSearchCorner.CornerRadius = UDim.new(0,10)
+FrienderSearchCorner.Parent = FrienderSearch
+
+local FrienderSearchStroke = Instance.new("UIStroke")
+FrienderSearchStroke.Color = Color3.fromRGB(126,53,188)
+FrienderSearchStroke.Transparency = 0.4
+FrienderSearchStroke.Parent = FrienderSearch
+
+local FrienderSearchPadding = Instance.new("UIPadding")
+FrienderSearchPadding.PaddingLeft = UDim.new(0,11)
+FrienderSearchPadding.PaddingRight = UDim.new(0,11)
+FrienderSearchPadding.Parent = FrienderSearch
+
+local FrienderList = Instance.new("ScrollingFrame")
+FrienderList.Name = "Players"
+FrienderList.Size = UDim2.new(1,-18,1,-112)
+FrienderList.Position = UDim2.fromOffset(9,106)
+FrienderList.BackgroundTransparency = 1
+FrienderList.BorderSizePixel = 0
+FrienderList.ScrollBarThickness = 3
+FrienderList.ScrollBarImageColor3 = Color3.fromRGB(175,75,255)
+FrienderList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+FrienderList.CanvasSize = UDim2.new()
+FrienderList.ZIndex = 33
+FrienderList.Parent = FrienderFrame
+
+local FrienderPadding = Instance.new("UIPadding")
+FrienderPadding.PaddingTop = UDim.new(0,2)
+FrienderPadding.PaddingBottom = UDim.new(0,4)
+FrienderPadding.PaddingLeft = UDim.new(0,2)
+FrienderPadding.PaddingRight = UDim.new(0,4)
+FrienderPadding.Parent = FrienderList
+
+local FrienderLayout = Instance.new("UIListLayout")
+FrienderLayout.Padding = UDim.new(0,7)
+FrienderLayout.SortOrder = Enum.SortOrder.LayoutOrder
+FrienderLayout.Parent = FrienderList
+
+local FrienderRows = {}
+
+local function NormalizeFrienderSearch(Text)
+    return tostring(Text or "")
+        :lower()
+        :gsub("^%s+","")
+        :gsub("%s+$","")
+        :gsub("^@","")
+end
+
+local function FrienderMatchesSearch(Player)
+    local Query = NormalizeFrienderSearch(FrienderSearch.Text)
+    if Query == "" then
+        return true
+    end
+
+    local Username = string.lower(tostring(Player.Name or ""))
+    local DisplayName = string.lower(tostring(Player.DisplayName or ""))
+
+    return string.find(Username,Query,1,true) ~= nil
+        or string.find(DisplayName,Query,1,true) ~= nil
+end
+
+local function ApplyFrienderSearch()
+    for Player,Row in pairs(FrienderRows) do
+        if Row and Row.Parent then
+            Row.Visible = FrienderMatchesSearch(Player)
+        end
+    end
+end
+
+Connect(FrienderSearch:GetPropertyChangedSignal("Text"),ApplyFrienderSearch)
+
+Connect(FrienderSearch.Focused,function()
+    TweenService:Create(
+        FrienderSearchStroke,
+        TweenInfo.new(0.12),
+        {Transparency = 0.08}
+    ):Play()
+end)
+
+Connect(FrienderSearch.FocusLost,function()
+    TweenService:Create(
+        FrienderSearchStroke,
+        TweenInfo.new(0.12),
+        {Transparency = 0.4}
+    ):Play()
+end)
+
+local function FrienderIsFriend(Player)
+    if Player == LP then
+        return true
+    end
+    local Success,Result = pcall(function()
+        return LP:IsFriendsWith(Player.UserId)
+    end)
+    return Success and Result
+end
+
+local function FrienderRequest(Player)
+    if not Player or Player == LP then
+        return false
+    end
+    local Success = pcall(function()
+        StarterGui:SetCore("PromptSendFriendRequest",Player)
+    end)
+    if Success then
+        return true
+    end
+    task.wait(0.35)
+    return pcall(function()
+        StarterGui:SetCore("PromptSendFriendRequest",Player)
+    end)
+end
+
+local function CreateFrienderRow(Player)
+    if FrienderRows[Player] then
+        return
+    end
+
+    local Row = Instance.new("Frame")
+    Row.Name = tostring(Player.UserId)
+    Row.Size = UDim2.new(1,-3,0,55)
+    Row.BackgroundColor3 = Color3.fromRGB(21,12,31)
+    Row.BackgroundTransparency = 0.04
+    Row.BorderSizePixel = 0
+    Row.ZIndex = 34
+    Row.Parent = FrienderList
+
+    local RowCorner = Instance.new("UICorner")
+    RowCorner.CornerRadius = UDim.new(0,11)
+    RowCorner.Parent = Row
+
+    local RowStroke = Instance.new("UIStroke")
+    RowStroke.Color = Color3.fromRGB(126,53,188)
+    RowStroke.Transparency = 0.5
+    RowStroke.Parent = Row
+
+    local RowGradient = Instance.new("UIGradient")
+    RowGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(31,17,44)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(18,11,27))
+    })
+    RowGradient.Rotation = 20
+    RowGradient.Parent = Row
+
+    local Avatar = Instance.new("ImageLabel")
+    Avatar.Size = UDim2.fromOffset(39,39)
+    Avatar.Position = UDim2.fromOffset(8,8)
+    Avatar.BackgroundColor3 = Color3.fromRGB(39,24,55)
+    Avatar.BorderSizePixel = 0
+    Avatar.ScaleType = Enum.ScaleType.Crop
+    Avatar.ZIndex = 35
+    Avatar.Parent = Row
+
+    local AvatarCorner = Instance.new("UICorner")
+    AvatarCorner.CornerRadius = UDim.new(0,10)
+    AvatarCorner.Parent = Avatar
+
+    local AvatarStroke = Instance.new("UIStroke")
+    AvatarStroke.Color = Color3.fromRGB(177,76,255)
+    AvatarStroke.Transparency = 0.3
+    AvatarStroke.Parent = Avatar
+
+    task.spawn(function()
+        local Success,Image = pcall(function()
+            return Players:GetUserThumbnailAsync(
+                Player.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size150x150
+            )
+        end)
+        if Success and Avatar.Parent then
+            Avatar.Image = Image
+        end
+    end)
+
+    local Display = Instance.new("TextLabel")
+    Display.Size = UDim2.new(1,-137,0,19)
+    Display.Position = UDim2.fromOffset(57,8)
+    Display.BackgroundTransparency = 1
+    Display.Text = Player.DisplayName
+    Display.TextColor3 = Color3.fromRGB(250,240,255)
+    Display.Font = Enum.Font.GothamBold
+    Display.TextSize = 12
+    Display.TextXAlignment = Enum.TextXAlignment.Left
+    Display.TextTruncate = Enum.TextTruncate.AtEnd
+    Display.ZIndex = 35
+    Display.Parent = Row
+
+    local Username = Instance.new("TextLabel")
+    Username.Size = UDim2.new(1,-137,0,17)
+    Username.Position = UDim2.fromOffset(57,28)
+    Username.BackgroundTransparency = 1
+    Username.Text = "@"..Player.Name
+    Username.TextColor3 = Color3.fromRGB(163,145,179)
+    Username.Font = Enum.Font.GothamMedium
+    Username.TextSize = 9
+    Username.TextXAlignment = Enum.TextXAlignment.Left
+    Username.TextTruncate = Enum.TextTruncate.AtEnd
+    Username.ZIndex = 35
+    Username.Parent = Row
+
+    local Add = Instance.new("TextButton")
+    Add.AnchorPoint = Vector2.new(1,0.5)
+    Add.Size = UDim2.fromOffset(58,29)
+    Add.Position = UDim2.new(1,-9,0.5,0)
+    Add.BackgroundColor3 = Color3.fromRGB(132,47,214)
+    Add.BorderSizePixel = 0
+    Add.Text = "Add"
+    Add.TextColor3 = Color3.fromRGB(255,245,255)
+    Add.Font = Enum.Font.GothamBold
+    Add.TextSize = 10
+    Add.AutoButtonColor = false
+    Add.ZIndex = 35
+    Add.Parent = Row
+
+    local AddCorner = Instance.new("UICorner")
+    AddCorner.CornerRadius = UDim.new(0,8)
+    AddCorner.Parent = Add
+
+    local AddStroke = Instance.new("UIStroke")
+    AddStroke.Color = Color3.fromRGB(213,130,255)
+    AddStroke.Transparency = 0.35
+    AddStroke.Parent = Add
+
+    local AddGradient = Instance.new("UIGradient")
+    AddGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(177,78,255)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(105,39,192))
+    })
+    AddGradient.Rotation = 45
+    AddGradient.Parent = Add
+
+    local function Refresh()
+        if Player == LP then
+            Add.Text = "You"
+            Add.Active = false
+            Add.BackgroundTransparency = 0.55
+            Add.TextTransparency = 0.2
+            return
+        end
+        if FrienderIsFriend(Player) then
+            Add.Text = "Added"
+            Add.Active = false
+            Add.BackgroundTransparency = 0.45
+            Add.TextTransparency = 0
+            return
+        end
+        Add.Text = "Add"
+        Add.Active = true
+        Add.BackgroundTransparency = 0
+        Add.TextTransparency = 0
+    end
+
+    Refresh()
+
+    Connect(Add.MouseEnter,function()
+        if not Add.Active then
+            return
+        end
+        TweenService:Create(Add,TweenInfo.new(0.12),{Size = UDim2.fromOffset(61,31)}):Play()
+        TweenService:Create(AddStroke,TweenInfo.new(0.12),{Transparency = 0.05}):Play()
+    end)
+
+    Connect(Add.MouseLeave,function()
+        if not Add.Active then
+            return
+        end
+        TweenService:Create(Add,TweenInfo.new(0.12),{Size = UDim2.fromOffset(58,29)}):Play()
+        TweenService:Create(AddStroke,TweenInfo.new(0.12),{Transparency = 0.35}):Play()
+    end)
+
+    Connect(Add.MouseButton1Click,function()
+        if Player == LP or FrienderIsFriend(Player) then
+            Refresh()
+            return
+        end
+        if FrienderRequest(Player) then
+            Add.Text = "Sent"
+        else
+            Add.Text = "Retry"
+        end
+        task.delay(1.6,function()
+            if Add.Parent then
+                Refresh()
+            end
+        end)
+    end)
+
+    Connect(Row.MouseEnter,function()
+        TweenService:Create(RowStroke,TweenInfo.new(0.12),{Transparency = 0.18}):Play()
+    end)
+
+    Connect(Row.MouseLeave,function()
+        TweenService:Create(RowStroke,TweenInfo.new(0.12),{Transparency = 0.5}):Play()
+    end)
+
+    FrienderRows[Player] = Row
+    Row.Visible = FrienderMatchesSearch(Player)
+end
+
+local function RemoveFrienderRow(Player)
+    local Row = FrienderRows[Player]
+    if not Row then
+        return
+    end
+    FrienderRows[Player] = nil
+    Row:Destroy()
+end
+
+local FrienderPlayers = Players:GetPlayers()
+table.sort(FrienderPlayers,function(A,B)
+    if A == LP then
+        return true
+    end
+    if B == LP then
+        return false
+    end
+    return string.lower(A.DisplayName) < string.lower(B.DisplayName)
+end)
+
+for Index,Player in ipairs(FrienderPlayers) do
+    CreateFrienderRow(Player)
+    local Row = FrienderRows[Player]
+    if Row then
+        Row.LayoutOrder = Player == LP and -1000 or Index
+    end
+end
+
+Connect(Players.PlayerAdded,function(Player)
+    CreateFrienderRow(Player)
+    ApplyFrienderSearch()
+end)
+
+Connect(Players.PlayerRemoving,function(Player)
+    RemoveFrienderRow(Player)
+end)
+
+local FrienderDragging = false
+local FrienderDragStart
+local FrienderStartPosition
+
+Connect(FrienderHeader.InputBegan,function(Input)
+    if SavedGuiPositions.GuiLocked == true then
+        return
+    end
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        FrienderDragging = true
+        FrienderDragStart = Input.Position
+        FrienderStartPosition = FrienderFrame.Position
+    end
+end)
+
+Connect(UserInputService.InputChanged,function(Input)
+    if FrienderDragging and SavedGuiPositions.GuiLocked ~= true and (
+        Input.UserInputType == Enum.UserInputType.MouseMovement
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local Delta = Input.Position - FrienderDragStart
+        FrienderFrame.Position = UDim2.new(
+            FrienderStartPosition.X.Scale,
+            FrienderStartPosition.X.Offset + Delta.X,
+            FrienderStartPosition.Y.Scale,
+            FrienderStartPosition.Y.Offset + Delta.Y
+        )
+    end
+end)
+
+Connect(UserInputService.InputEnded,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        if FrienderDragging then
+            FrienderDragging = false
+            if SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while Gui and Gui.Parent and FrienderFrame.Parent do
+        FrienderStrokeGradient.Rotation = (FrienderStrokeGradient.Rotation + 3) % 360
+        local Pulse = (math.sin(os.clock() * 2.8) + 1) * 0.5
+        FrienderStroke.Transparency = 0.02 + Pulse * 0.18
+        FrienderLogoStroke.Transparency = 0.08 + Pulse * 0.32
+        task.wait(0.06)
+    end
+end)
+local MESSAGE_DELAY = 5
+local AutoMessageEnabled = false
+local AutoMessageGeneration = 0
+local DefaultAutoMessageText = [[yo can you help me with something in my game
+i need another person for a few things
+the more you help me with the better brainrot ill give you after
+you dont have to bring anything or give me anything
+just join me and ill show you what i need help with
+if you stay and help with everything ill give you one of my better brainrots
+join when youre ready or i can invite you
+add me if you want to]]
+
+AutoMessageFrame = Instance.new("Frame")
+AutoMessageFrame.Name = "AutoMessageWindow"
+AutoMessageFrame.Size = UDim2.fromOffset(365,250)
+AutoMessageFrame.Position = SavedPosition(
+    "AutoMessage",
+    UDim2.new(1,-770,0.5,-125)
+)
+AutoMessageFrame.BackgroundColor3 = Color3.fromRGB(10,7,17)
+AutoMessageFrame.BorderSizePixel = 0
+AutoMessageFrame.ClipsDescendants = true
+AutoMessageFrame.Active = true
+AutoMessageFrame.ZIndex = 20
+AutoMessageFrame.Parent = Gui
+
+local AutoMessageFrameCorner = Instance.new("UICorner")
+AutoMessageFrameCorner.CornerRadius = UDim.new(0,16)
+AutoMessageFrameCorner.Parent = AutoMessageFrame
+
+local AutoMessageFrameStroke = Instance.new("UIStroke")
+AutoMessageFrameStroke.Thickness = 2
+AutoMessageFrameStroke.Color = Color3.fromRGB(180,70,255)
+AutoMessageFrameStroke.Parent = AutoMessageFrame
+
+local AutoMessageStrokeGradient = Instance.new("UIGradient")
+AutoMessageStrokeGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(90,25,190)),
+    ColorSequenceKeypoint.new(0.25,Color3.fromRGB(220,100,255)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(125,40,245)),
+    ColorSequenceKeypoint.new(0.75,Color3.fromRGB(230,120,255)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(90,25,190))
+})
+AutoMessageStrokeGradient.Parent = AutoMessageFrameStroke
+
+local AutoMessageBGGradient = Instance.new("UIGradient")
+AutoMessageBGGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(29,10,47)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(11,7,18)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(32,10,50))
+})
+AutoMessageBGGradient.Rotation = 32
+AutoMessageBGGradient.Parent = AutoMessageFrame
+
+local AutoMessageHeader = Instance.new("Frame")
+AutoMessageHeader.Name = "Header"
+AutoMessageHeader.Size = UDim2.new(1,0,0,58)
+AutoMessageHeader.BackgroundTransparency = 1
+AutoMessageHeader.Active = true
+AutoMessageHeader.ZIndex = 23
+AutoMessageHeader.Parent = AutoMessageFrame
+
+local AutoMessageLogo = Instance.new("Frame")
+AutoMessageLogo.Size = UDim2.fromOffset(36,36)
+AutoMessageLogo.Position = UDim2.fromOffset(12,11)
+AutoMessageLogo.BackgroundColor3 = Color3.fromRGB(78,29,126)
+AutoMessageLogo.BorderSizePixel = 0
+AutoMessageLogo.ZIndex = 24
+AutoMessageLogo.Parent = AutoMessageHeader
+
+local AutoMessageLogoCorner = Instance.new("UICorner")
+AutoMessageLogoCorner.CornerRadius = UDim.new(0,10)
+AutoMessageLogoCorner.Parent = AutoMessageLogo
+
+local AutoMessageLogoStroke = Instance.new("UIStroke")
+AutoMessageLogoStroke.Color = Color3.fromRGB(195,90,255)
+AutoMessageLogoStroke.Parent = AutoMessageLogo
+
+local AutoMessageLogoText = Instance.new("TextLabel")
+AutoMessageLogoText.Size = UDim2.fromScale(1,1)
+AutoMessageLogoText.BackgroundTransparency = 1
+AutoMessageLogoText.Text = "W"
+AutoMessageLogoText.TextColor3 = Color3.fromRGB(240,195,255)
+AutoMessageLogoText.Font = Enum.Font.GothamBlack
+AutoMessageLogoText.TextSize = 18
+AutoMessageLogoText.ZIndex = 25
+AutoMessageLogoText.Parent = AutoMessageLogo
+
+local AutoMessageTitle = Instance.new("TextLabel")
+AutoMessageTitle.Size = UDim2.new(1,-168,1,0)
+AutoMessageTitle.Position = UDim2.fromOffset(60,0)
+AutoMessageTitle.BackgroundTransparency = 1
+AutoMessageTitle.Text = "Auto Message"
+AutoMessageTitle.TextColor3 = Color3.fromRGB(250,240,255)
+AutoMessageTitle.Font = Enum.Font.GothamBold
+AutoMessageTitle.TextSize = 17
+AutoMessageTitle.TextXAlignment = Enum.TextXAlignment.Left
+AutoMessageTitle.ZIndex = 24
+AutoMessageTitle.Parent = AutoMessageHeader
+
+local AutoMessageToggle = Instance.new("TextButton")
+AutoMessageToggle.Name = "Toggle"
+AutoMessageToggle.Size = UDim2.fromOffset(82,32)
+AutoMessageToggle.Position = UDim2.new(1,-94,0,13)
+AutoMessageToggle.BackgroundColor3 = Color3.fromRGB(108,42,172)
+AutoMessageToggle.BorderSizePixel = 0
+AutoMessageToggle.Text = "OFF"
+AutoMessageToggle.TextColor3 = Color3.fromRGB(255,245,255)
+AutoMessageToggle.Font = Enum.Font.GothamBold
+AutoMessageToggle.TextSize = 11
+AutoMessageToggle.AutoButtonColor = false
+AutoMessageToggle.ZIndex = 25
+AutoMessageToggle.Parent = AutoMessageHeader
+
+local AutoMessageToggleCorner = Instance.new("UICorner")
+AutoMessageToggleCorner.CornerRadius = UDim.new(0,9)
+AutoMessageToggleCorner.Parent = AutoMessageToggle
+
+local AutoMessageToggleStroke = Instance.new("UIStroke")
+AutoMessageToggleStroke.Color = Color3.fromRGB(200,100,255)
+AutoMessageToggleStroke.Transparency = 0.15
+AutoMessageToggleStroke.Parent = AutoMessageToggle
+
+AutoMessageEditor = Instance.new("TextBox")
+AutoMessageEditor.Name = "AutoMessages"
+AutoMessageEditor.Size = UDim2.new(1,-24,1,-72)
+AutoMessageEditor.Position = UDim2.fromOffset(12,60)
+AutoMessageEditor.BackgroundColor3 = Color3.fromRGB(21,12,31)
+AutoMessageEditor.BorderSizePixel = 0
+AutoMessageEditor.ClearTextOnFocus = false
+AutoMessageEditor.MultiLine = true
+AutoMessageEditor.TextWrapped = true
+AutoMessageEditor.TextXAlignment = Enum.TextXAlignment.Left
+AutoMessageEditor.TextYAlignment = Enum.TextYAlignment.Top
+AutoMessageEditor.TextColor3 = Color3.fromRGB(246,235,255)
+AutoMessageEditor.PlaceholderText = ""
+AutoMessageEditor.Font = Enum.Font.Gotham
+AutoMessageEditor.TextSize = 11
+AutoMessageEditor.ZIndex = 23
+AutoMessageEditor.Text = type(SavedGuiPositions.AutoMessageText) == "string"
+    and SavedGuiPositions.AutoMessageText
+    or DefaultAutoMessageText
+AutoMessageEditor.Parent = AutoMessageFrame
+
+local AutoMessageEditorCorner = Instance.new("UICorner")
+AutoMessageEditorCorner.CornerRadius = UDim.new(0,10)
+AutoMessageEditorCorner.Parent = AutoMessageEditor
+
+local AutoMessageEditorStroke = Instance.new("UIStroke")
+AutoMessageEditorStroke.Color = Color3.fromRGB(125,52,188)
+AutoMessageEditorStroke.Transparency = 0.25
+AutoMessageEditorStroke.Parent = AutoMessageEditor
+
+local AutoMessageEditorPadding = Instance.new("UIPadding")
+AutoMessageEditorPadding.PaddingLeft = UDim.new(0,10)
+AutoMessageEditorPadding.PaddingRight = UDim.new(0,10)
+AutoMessageEditorPadding.PaddingTop = UDim.new(0,9)
+AutoMessageEditorPadding.PaddingBottom = UDim.new(0,9)
+AutoMessageEditorPadding.Parent = AutoMessageEditor
+
+local function GetAutoMessages()
+    local Result = {}
+    local Text = tostring(AutoMessageEditor.Text or ""):gsub("\r","")
+    for Line in (Text.."\n"):gmatch("(.-)\n") do
+        Line = Line:gsub("^%s+",""):gsub("%s+$","")
+        if Line ~= "" then
+            table.insert(Result,Line)
+        end
+    end
+    return Result
+end
+
+local function GetTradeChatBox()
+    local Success,TextBox = pcall(function()
+        return game:GetService("Players").LocalPlayer.PlayerGui.TradeLiveTrade.TradeLiveTrade.Chat.NormalChat.ChatBox.TextBox
+    end)
+    if Success and TextBox and TextBox:IsA("TextBox") then
+        return TextBox
+    end
+    return nil
+end
+
+local function WaitForTradeChatBoxFocus(Generation)
+    while AutoMessageEnabled
+    and Generation == AutoMessageGeneration
+    and Gui
+    and Gui.Parent do
+        local TextBox = GetTradeChatBox()
+        if TextBox
+        and TextBox.Parent
+        and TextBox:IsFocused() then
+            return TextBox
+        end
+        task.wait(0.03)
+    end
+    return nil
+end
+
+local function PressEnter()
+    if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+        local Success = pcall(function()
+            keypress(0x0D)
+            task.wait(0.03)
+            keyrelease(0x0D)
+        end)
+        if Success then
+            return true
+        end
+    end
+    return pcall(function()
+        local VirtualInputManager = game:GetService("VirtualInputManager")
+        VirtualInputManager:SendKeyEvent(true,Enum.KeyCode.Return,false,game)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false,Enum.KeyCode.Return,false,game)
+    end)
+end
+
+local function SendAutoMessage(Message,Generation)
+    local TextBox = WaitForTradeChatBoxFocus(Generation)
+    if not TextBox then
+        return false
+    end
+    pcall(function()
+        TextBox.Text = tostring(Message or "")
+    end)
+    task.wait(0.08)
+    local Sent = PressEnter()
+    task.wait(0.05)
+    pcall(function()
+        TextBox:ReleaseFocus()
+    end)
+    return Sent
+end
+
+local function SetAutoMessageEnabled(State)
+    AutoMessageEnabled = State
+    if State then
+        AutoMessageToggle.BackgroundColor3 = Color3.fromRGB(52,145,82)
+        AutoMessageToggleStroke.Color = Color3.fromRGB(105,255,150)
+        AutoMessageToggle.Text = "ON"
+    else
+        AutoMessageToggle.BackgroundColor3 = Color3.fromRGB(108,42,172)
+        AutoMessageToggleStroke.Color = Color3.fromRGB(200,100,255)
+        AutoMessageToggle.Text = "OFF"
+    end
+end
+
+local function WaitAutoMessageDelay(Generation)
+    local Until = os.clock() + MESSAGE_DELAY
+    while AutoMessageEnabled
+    and Generation == AutoMessageGeneration
+    and Gui
+    and Gui.Parent
+    and os.clock() < Until do
+        task.wait(math.min(0.05,math.max(0,Until-os.clock())))
+    end
+    return AutoMessageEnabled
+        and Generation == AutoMessageGeneration
+        and Gui
+        and Gui.Parent
+end
+
+local function RunAutoMessageWorker(Generation)
+    local Messages = GetAutoMessages()
+    if #Messages == 0 then
+        SetAutoMessageEnabled(false)
+        return
+    end
+    for Index,Message in ipairs(Messages) do
+        if Index > 1 and not WaitAutoMessageDelay(Generation) then
+            return
+        end
+        local Sent = false
+        while AutoMessageEnabled
+        and Generation == AutoMessageGeneration
+        and Gui
+        and Gui.Parent
+        and not Sent do
+            Sent = SendAutoMessage(Message,Generation)
+            if not Sent then
+                task.wait(0.1)
+            end
+        end
+        if not AutoMessageEnabled or Generation ~= AutoMessageGeneration then
+            return
+        end
+    end
+    if AutoMessageEnabled and Generation == AutoMessageGeneration then
+        SetAutoMessageEnabled(false)
+    end
+end
+
+local AutoMessageToggleDebounce = false
+local function ToggleAutoMessage()
+    if AutoMessageToggleDebounce then
+        return
+    end
+    AutoMessageToggleDebounce = true
+    task.delay(0.12,function()
+        AutoMessageToggleDebounce = false
+    end)
+    AutoMessageGeneration += 1
+    if AutoMessageEnabled then
+        SetAutoMessageEnabled(false)
+        return
+    end
+    if #GetAutoMessages() == 0 then
+        SetAutoMessageEnabled(false)
+        return
+    end
+    local Generation = AutoMessageGeneration
+    SetAutoMessageEnabled(true)
+    task.spawn(function()
+        RunAutoMessageWorker(Generation)
+    end)
+end
+
+Connect(AutoMessageToggle.Activated,ToggleAutoMessage)
+
+local AutoMessageSaveGeneration = 0
+Connect(AutoMessageEditor:GetPropertyChangedSignal("Text"),function()
+    AutoMessageSaveGeneration += 1
+    local Generation = AutoMessageSaveGeneration
+    task.delay(0.35,function()
+        if Generation == AutoMessageSaveGeneration and SaveGuiPositions then
+            pcall(SaveGuiPositions)
+        end
+    end)
+end)
+
+local AutoMessageDragging = false
+local AutoMessageDragStart
+local AutoMessageStartPosition
+Connect(AutoMessageHeader.InputBegan,function(Input)
+    if SavedGuiPositions.GuiLocked == true then
+        return
+    end
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        AutoMessageDragging = true
+        AutoMessageDragStart = Input.Position
+        AutoMessageStartPosition = AutoMessageFrame.Position
+    end
+end)
+Connect(UserInputService.InputChanged,function(Input)
+    if AutoMessageDragging and SavedGuiPositions.GuiLocked ~= true and (
+        Input.UserInputType == Enum.UserInputType.MouseMovement
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local Delta = Input.Position - AutoMessageDragStart
+        AutoMessageFrame.Position = UDim2.new(
+            AutoMessageStartPosition.X.Scale,
+            AutoMessageStartPosition.X.Offset + Delta.X,
+            AutoMessageStartPosition.Y.Scale,
+            AutoMessageStartPosition.Y.Offset + Delta.Y
+        )
+    end
+end)
+Connect(UserInputService.InputEnded,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        if AutoMessageDragging then
+            AutoMessageDragging = false
+            if SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end
+    end
+end)
+local Dragging = false
+local DragStart
+local StartPosition
+Connect(Header.InputBegan,function(Input)
+    if SavedGuiPositions.GuiLocked == true then
+        return
+    end
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = true
+        DragStart = Input.Position
+        StartPosition = Main.Position
+    end
+end)
+Connect(UserInputService.InputChanged,function(Input)
+    if Dragging and SavedGuiPositions.GuiLocked ~= true and (
+        Input.UserInputType == Enum.UserInputType.MouseMovement
+        or Input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local Delta = Input.Position - DragStart
+        Main.Position = UDim2.new(
+            StartPosition.X.Scale,
+            StartPosition.X.Offset + Delta.X,
+            StartPosition.Y.Scale,
+            StartPosition.Y.Offset + Delta.Y
+        )
+    end
+end)
+Connect(UserInputService.InputEnded,function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1
+    or Input.UserInputType == Enum.UserInputType.Touch then
+        if Dragging then
+            Dragging = false
+            if SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+        end
+    end
+end)
+local function Normalize(Text)
+    return tostring(Text or "")
+        :lower()
+        :gsub("^@","")
+        :gsub("%s+","")
+end
+local function GetPlots()
+    return Workspace:FindFirstChild("Plots")
+        or Workspace:FindFirstChild("plots")
+end
+local function TextMatchesPlayer(Text,Player)
+    local T = Normalize(Text)
+    local Username = Normalize(Player.Name)
+    local Display = Normalize(Player.DisplayName)
+    if T == Username or T == Display then
+        return true
+    end
+    if string.find(T,Username,1,true) then
+        return true
+    end
+    if #Display > 2
+    and string.find(T,Display,1,true) then
+        return true
+    end
+    return false
+end
+local function GetSignLabel(Plot)
+    local BaseAssets = Plot:FindFirstChild("BaseAssets")
+    if not BaseAssets then
+        return nil
+    end
+    local PlotSign = BaseAssets:FindFirstChild("PlotSign")
+    if not PlotSign then
+        return nil
+    end
+    local Model = PlotSign:FindFirstChild("Model")
+    if Model then
+        local SurfaceGui =
+            Model:FindFirstChild("SurfaceGui")
+            or Model:FindFirstChildWhichIsA("SurfaceGui",true)
+        if SurfaceGui then
+            local Frame = SurfaceGui:FindFirstChild("Frame")
+            if Frame then
+                local Label =
+                    Frame:FindFirstChildWhichIsA(
+                        "TextLabel",
+                        true
+                    )
+                if Label then
+                    return Label
+                end
+            end
+            local Label =
+                SurfaceGui:FindFirstChildWhichIsA(
+                    "TextLabel",
+                    true
+                )
+            if Label then
+                return Label
+            end
+        end
+    end
+    for _,V in ipairs(PlotSign:GetDescendants()) do
+        if V:IsA("TextLabel") then
+            return V
+        end
+    end
+    return nil
+end
+local function FindPlotPart(Plot)
+    local BaseAssets = Plot:FindFirstChild("BaseAssets")
+    if not BaseAssets then
+        return nil
+    end
+    local PlotSign = BaseAssets:FindFirstChild("PlotSign")
+    if PlotSign then
+        if PlotSign:IsA("BasePart") then
+            return PlotSign
+        end
+        if PlotSign:IsA("Model") then
+            if PlotSign.PrimaryPart then
+                return PlotSign.PrimaryPart
+            end
+            local P =
+                PlotSign:FindFirstChildWhichIsA(
+                    "BasePart",
+                    true
+                )
+            if P then
+                return P
+            end
+        end
+        local P =
+            PlotSign:FindFirstChildWhichIsA(
+                "BasePart",
+                true
+            )
+        if P then
+            return P
+        end
+    end
+    if BaseAssets:IsA("Model")
+    and BaseAssets.PrimaryPart then
+        return BaseAssets.PrimaryPart
+    end
+    return BaseAssets:FindFirstChildWhichIsA(
+        "BasePart",
+        true
+    )
+end
+local function FindPlayerPlot(Player)
+    local Plots = GetPlots()
+    if not Plots or not Player then
+        return nil,nil
+    end
+    local Username = tostring(Player.Name):lower()
+    local DisplayName = tostring(Player.DisplayName):lower()
+    local UserId = tonumber(Player.UserId)
+    local function MatchesOwnerValue(Value)
+        if typeof(Value) == "Instance" and Value:IsA("Player") then
+            return Value == Player or Value.UserId == Player.UserId
+        end
+        if type(Value) == "number" then
+            return UserId and tonumber(Value) == UserId
+        end
+        local Text = tostring(Value or ""):lower()
+        if Text == Username or Text == DisplayName then
+            return true
+        end
+        local Numeric = tonumber(Text)
+        return Numeric and UserId and Numeric == UserId or false
+    end
+    local OwnerAttributeNames = {
+        "Owner",
+        "OwnerName",
+        "OwnerUserId",
+        "OwnerId",
+        "Player",
+        "PlayerName",
+        "PlayerUserId",
+        "UserId",
+        "Username",
+        "DisplayName"
+    }
+    for _,Plot in ipairs(Plots:GetChildren()) do
+        for _,AttributeName in ipairs(OwnerAttributeNames) do
+            local Value = Plot:GetAttribute(AttributeName)
+            if Value ~= nil and MatchesOwnerValue(Value) then
+                return Plot,FindPlotPart(Plot)
+            end
+        end
+        for _,Child in ipairs(Plot:GetChildren()) do
+            if Child:IsA("StringValue")
+            or Child:IsA("IntValue")
+            or Child:IsA("NumberValue")
+            or Child:IsA("ObjectValue") then
+                local Key = Child.Name:lower()
+                if Key:find("owner",1,true)
+                or Key:find("player",1,true)
+                or Key == "userid"
+                or Key == "username" then
+                    local Value = Child.Value
+                    if MatchesOwnerValue(Value) then
+                        return Plot,FindPlotPart(Plot)
+                    end
+                end
+            end
+        end
+    end
+    for _,Plot in ipairs(Plots:GetChildren()) do
+        local BaseAssets = Plot:FindFirstChild("BaseAssets")
+        if BaseAssets then
+            local Label = GetSignLabel(Plot)
+            if Label and TextMatchesPlayer(Label.Text,Player) then
+                return Plot,FindPlotPart(Plot)
+            end
+        end
+    end
+    for _,Plot in ipairs(Plots:GetChildren()) do
+        local BaseAssets = Plot:FindFirstChild("BaseAssets")
+        if BaseAssets then
+            local PlotSign = BaseAssets:FindFirstChild("PlotSign")
+            if PlotSign then
+                for _,V in ipairs(PlotSign:GetDescendants()) do
+                    if V:IsA("TextLabel")
+                    and TextMatchesPlayer(V.Text,Player) then
+                        return Plot,FindPlotPart(Plot)
+                    end
+                end
+            end
+        end
+    end
+    return nil,nil
+end
+local SelectedTradePlayer = nil
+local SelectedTradePlayersUntil = {}
+local SelectedBaseData = nil
+local PlotBaseESPs = {}
+local FetchedListPlayers = {}
+local BaseAvatarCache = {}
+local BasePlayerByUsername = {}
+local BasePlayersByDisplay = {}
+local BaseListLoaded = false
+local function CleanBaseText(Text)
+    return tostring(Text or "")
+        :gsub("<.->","")
+        :gsub("^%s+","")
+        :gsub("%s+$","")
+end
+local function NormalizeBaseKey(Text)
+    return CleanBaseText(Text)
+        :gsub("’","'")
+        :gsub("‘","'")
+        :gsub("´","'")
+        :lower()
+        :gsub("^@","")
+        :gsub("%s+","")
+end
+local function ExtractBaseOwnerKey(Text)
+    local Clean = CleanBaseText(Text)
+    local Lower = Clean:lower()
+    if Clean == ""
+    or string.find(Lower,"empty base",1,true) then
+        return nil
+    end
+    local Key = NormalizeBaseKey(Clean)
+    Key = Key:gsub("'sbase$","")
+    Key = Key:gsub("'sbase[:%-_]*$","")
+    if Key == ""
+    or Key == "emptybase" then
+        return nil
+    end
+    return Key
+end
+local function RebuildBasePlayerMaps()
+    BasePlayerByUsername = {}
+    BasePlayersByDisplay = {}
+    local Added = {}
+    local Source = {}
+    -- Base matching is intentionally limited to the players fetched by the scanner.
+    -- This keeps the base avatar/name labels in sync with the fetched player list.
+    for _,Player in ipairs(FetchedListPlayers) do
+        table.insert(Source,Player)
+    end
+    for _,Player in ipairs(Source) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and not Added[Player.UserId] then
+            Added[Player.UserId] = true
+            local Username = NormalizeBaseKey(Player.Name)
+            local Display = NormalizeBaseKey(Player.DisplayName)
+            if Username ~= "" then
+                BasePlayerByUsername[Username] = Player
+            end
+            if Display ~= "" then
+                local Bucket = BasePlayersByDisplay[Display]
+                if not Bucket then
+                    Bucket = {}
+                    BasePlayersByDisplay[Display] = Bucket
+                end
+                table.insert(Bucket,Player)
+            end
+        end
+    end
+    BaseListLoaded = true
+end
+local function SetFetchedBasePlayers(List)
+    FetchedListPlayers = {}
+    local Seen = {}
+    for _,Player in ipairs(List or {}) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and not Seen[Player.UserId] then
+            Seen[Player.UserId] = true
+            table.insert(FetchedListPlayers,Player)
+        end
+    end
+    RebuildBasePlayerMaps()
+end
+local function RefreshBasePlayerList()
+    local Cleaned = {}
+    local Seen = {}
+    for _,Player in ipairs(FetchedListPlayers) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and not Seen[Player.UserId] then
+            Seen[Player.UserId] = true
+            table.insert(Cleaned,Player)
+        end
+    end
+    FetchedListPlayers = Cleaned
+    RebuildBasePlayerMaps()
+end
+local function MatchBaseTextToListPlayer(Text)
+    local Owner = ExtractBaseOwnerKey(Text)
+    if not Owner then
+        return nil
+    end
+    local UsernameMatch = BasePlayerByUsername[Owner]
+    if UsernameMatch
+    and UsernameMatch.Parent == Players then
+        return UsernameMatch
+    end
+    local DisplayMatches = BasePlayersByDisplay[Owner]
+    if DisplayMatches then
+        local Unique = nil
+        local Count = 0
+        for _,Player in ipairs(DisplayMatches) do
+            if Player
+            and Player.Parent == Players
+            and NormalizeBaseKey(Player.DisplayName) == Owner then
+                Unique = Player
+                Count += 1
+                if Count > 1 then
+                    return nil
+                end
+            end
+        end
+        if Count == 1 then
+            return Unique
+        end
+    end
+    return nil
+end
+local function GetBaseSurfaceLabel(PlotSign)
+    local Best = nil
+    for _,Object in ipairs(PlotSign:GetDescendants()) do
+        if Object:IsA("SurfaceGui") then
+            local Frame = Object:FindFirstChild("Frame")
+            if Frame then
+                for _,Label in ipairs(Frame:GetDescendants()) do
+                    if Label:IsA("TextLabel") then
+                        local T = CleanBaseText(Label.Text)
+                        if T ~= "" then
+                            if string.find(T:lower(),"base",1,true) then
+                                return Label
+                            end
+                            Best = Best or Label
+                        end
+                    end
+                end
+            end
+            for _,Label in ipairs(Object:GetDescendants()) do
+                if Label:IsA("TextLabel") then
+                    local T = CleanBaseText(Label.Text)
+                    if T ~= "" then
+                        if string.find(T:lower(),"base",1,true) then
+                            return Label
+                        end
+                        Best = Best or Label
+                    end
+                end
+            end
+        end
+    end
+    if Best then
+        return Best
+    end
+    for _,Object in ipairs(PlotSign:GetDescendants()) do
+        if Object:IsA("TextLabel") then
+            local T = CleanBaseText(Object.Text)
+            if T ~= "" then
+                if string.find(T:lower(),"base",1,true) then
+                    return Object
+                end
+                Best = Best or Object
+            end
+        end
+    end
+    return Best
+end
+local function GetObjectBounds(Object)
+    if Object:IsA("Model") then
+        return Object:GetBoundingBox()
+    end
+    if Object:IsA("BasePart") then
+        return Object.CFrame,Object.Size
+    end
+    local Min = Vector3.new(math.huge,math.huge,math.huge)
+    local Max = Vector3.new(-math.huge,-math.huge,-math.huge)
+    local Found = false
+    for _,Part in ipairs(Object:GetDescendants()) do
+        if Part:IsA("BasePart") then
+            Found = true
+            local Half = Part.Size * 0.5
+            for X = -1,1,2 do
+                for Y = -1,1,2 do
+                    for Z = -1,1,2 do
+                        local Point = Part.CFrame:PointToWorldSpace(
+                            Vector3.new(
+                                Half.X * X,
+                                Half.Y * Y,
+                                Half.Z * Z
+                            )
+                        )
+                        Min = Vector3.new(
+                            math.min(Min.X,Point.X),
+                            math.min(Min.Y,Point.Y),
+                            math.min(Min.Z,Point.Z)
+                        )
+                        Max = Vector3.new(
+                            math.max(Max.X,Point.X),
+                            math.max(Max.Y,Point.Y),
+                            math.max(Max.Z,Point.Z)
+                        )
+                    end
+                end
+            end
+        end
+    end
+    if not Found then
+        return nil,nil
+    end
+    local Center = (Min + Max) * 0.5
+    return CFrame.new(Center),Max - Min
+end
+local function ClearSelectedOverlay()
+    local Data = SelectedBaseData
+    SelectedBaseData = nil
+    if not Data then
+        return
+    end
+    if Data.Highlight then
+        pcall(function()
+            Data.Highlight:Destroy()
+        end)
+    end
+end
+local function RemovePlotBaseESP(PlotSign)
+    local Data = PlotBaseESPs[PlotSign]
+    if not Data then
+        return
+    end
+    PlotBaseESPs[PlotSign] = nil
+    for _,Object in ipairs({
+        Data.Highlight,
+        Data.Anchor,
+        Data.Billboard
+    }) do
+        if Object then
+            pcall(function()
+                Object:Destroy()
+            end)
+        end
+    end
+end
+ClearSelectedBaseESP = function()
+    ClearSelectedOverlay()
+    local Remove = {}
+    for PlotSign in pairs(PlotBaseESPs) do
+        table.insert(Remove,PlotSign)
+    end
+    for _,PlotSign in ipairs(Remove) do
+        RemovePlotBaseESP(PlotSign)
+    end
+end
+local function GetPlotForLabeledSign(PlotSign)
+    if not PlotSign or not PlotSign.Parent then
+        return nil
+    end
+    local Plots = GetPlots()
+    if not Plots then
+        return nil
+    end
+    local Plot = PlotSign
+    while Plot and Plot.Parent and Plot.Parent ~= Plots do
+        Plot = Plot.Parent
+    end
+    if Plot and Plot.Parent == Plots then
+        return Plot
+    end
+    return nil
+end
+local function ResolveFetchedPlayerFromOwnerValue(Value)
+    if typeof(Value) == "Instance" and Value:IsA("Player") then
+        for _,Player in ipairs(FetchedListPlayers) do
+            if Player
+            and Player.Parent == Players
+            and Player.UserId == Value.UserId then
+                return Player
+            end
+        end
+        return nil
+    end
+    local Numeric = tonumber(Value)
+    if Numeric then
+        for _,Player in ipairs(FetchedListPlayers) do
+            if Player
+            and Player.Parent == Players
+            and Player.UserId == Numeric then
+                return Player
+            end
+        end
+    end
+    local Key = NormalizeBaseKey(Value)
+    if Key == "" then
+        return nil
+    end
+    local Username = BasePlayerByUsername[Key]
+    if Username and Username.Parent == Players then
+        return Username
+    end
+    local DisplayMatches = BasePlayersByDisplay[Key]
+    if DisplayMatches then
+        local Unique = nil
+        local Count = 0
+        for _,Player in ipairs(DisplayMatches) do
+            if Player and Player.Parent == Players then
+                Unique = Player
+                Count += 1
+                if Count > 1 then
+                    return nil
+                end
+            end
+        end
+        if Count == 1 then
+            return Unique
+        end
+    end
+    return nil
+end
+
+local function MatchPlotSignToListPlayer(PlotSign,Text)
+    local Plot = GetPlotForLabeledSign(PlotSign)
+    if Plot then
+        local ExactAttributes = {
+            "OwnerUserId",
+            "OwnerId",
+            "PlayerUserId",
+            "UserId",
+            "Owner",
+            "Player",
+            "OwnerName",
+            "PlayerName",
+            "Username",
+            "DisplayName"
+        }
+        for _,AttributeName in ipairs(ExactAttributes) do
+            local Value = Plot:GetAttribute(AttributeName)
+            if Value ~= nil then
+                local Player = ResolveFetchedPlayerFromOwnerValue(Value)
+                if Player then
+                    return Player
+                end
+            end
+        end
+        for _,Child in ipairs(Plot:GetChildren()) do
+            if Child:IsA("StringValue")
+            or Child:IsA("IntValue")
+            or Child:IsA("NumberValue")
+            or Child:IsA("ObjectValue") then
+                local Key = string.lower(Child.Name)
+                if string.find(Key,"owner",1,true)
+                or string.find(Key,"player",1,true)
+                or Key == "userid"
+                or Key == "username" then
+                    local Player = ResolveFetchedPlayerFromOwnerValue(Child.Value)
+                    if Player then
+                        return Player
+                    end
+                end
+            end
+        end
+    end
+    return MatchBaseTextToListPlayer(Text)
+end
+
+local function CreatePlotBaseESP(PlotSign,SourceLabel,MatchedPlayer)
+    local BoundsCF,BoundsSize = GetObjectBounds(PlotSign)
+    if not BoundsCF or not BoundsSize then
+        return nil
+    end
+    local Anchor = Instance.new("Part")
+    Anchor.Name = "PlotSignESPAnchor"
+    Anchor.Size = Vector3.new(0.1,0.1,0.1)
+    Anchor.Transparency = 1
+    Anchor.Anchored = true
+    Anchor.CanCollide = false
+    Anchor.CanQuery = false
+    Anchor.CanTouch = false
+    Anchor.CFrame = CFrame.new(
+        BoundsCF.Position.X,
+        BoundsCF.Position.Y + BoundsSize.Y / 2 + 4,
+        BoundsCF.Position.Z
+    )
+    Anchor.Parent = Workspace
+    local Billboard = Instance.new("BillboardGui")
+    Billboard.Name = "PlotSignBillboard"
+    Billboard.Adornee = Anchor
+    Billboard.Size = UDim2.fromOffset(500,230)
+    Billboard.AlwaysOnTop = true
+    Billboard.LightInfluence = 0
+    Billboard.MaxDistance = 10000
+    Billboard.StudsOffsetWorldSpace = Vector3.new(0,3,0)
+    Billboard.Parent = LP:WaitForChild("PlayerGui")
+    local Avatar = Instance.new("ImageLabel")
+    Avatar.Name = "Avatar"
+    Avatar.Size = UDim2.fromOffset(120,120)
+    Avatar.AnchorPoint = Vector2.new(0.5,0)
+    Avatar.Position = UDim2.new(0.5,0,0,0)
+    Avatar.BackgroundTransparency = 1
+    Avatar.BorderSizePixel = 0
+    Avatar.ScaleType = Enum.ScaleType.Crop
+    Avatar.Parent = Billboard
+    local AvatarCorner = Instance.new("UICorner")
+    AvatarCorner.CornerRadius = UDim.new(1,0)
+    AvatarCorner.Parent = Avatar
+    local AvatarStroke = Instance.new("UIStroke")
+    AvatarStroke.Thickness = 4
+    AvatarStroke.Color = Color3.fromRGB(185,80,255)
+    AvatarStroke.Transparency = 0.05
+    AvatarStroke.Parent = Avatar
+    local Text = Instance.new("TextLabel")
+    Text.Name = "BaseText"
+    Text.Size = UDim2.new(1,0,0,90)
+    Text.AnchorPoint = Vector2.new(0.5,0)
+    Text.Position = UDim2.new(0.5,0,0,130)
+    Text.BackgroundTransparency = 1
+    Text.Text = MatchedPlayer.Name
+    Text.TextColor3 = Color3.fromRGB(255,255,255)
+    Text.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+    Text.TextStrokeTransparency = 0
+    Text.Font = Enum.Font.GothamBlack
+    Text.TextSize = 38
+    Text.TextXAlignment = Enum.TextXAlignment.Center
+    Text.TextYAlignment = Enum.TextYAlignment.Center
+    Text.Parent = Billboard
+    local Gradient = Instance.new("UIGradient")
+    Gradient.Name = "PurpleGradient"
+    Gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(
+            0,
+            Color3.fromRGB(105,35,255)
+        ),
+        ColorSequenceKeypoint.new(
+            0.28,
+            Color3.fromRGB(185,80,255)
+        ),
+        ColorSequenceKeypoint.new(
+            0.5,
+            Color3.fromRGB(245,170,255)
+        ),
+        ColorSequenceKeypoint.new(
+            0.72,
+            Color3.fromRGB(175,65,255)
+        ),
+        ColorSequenceKeypoint.new(
+            1,
+            Color3.fromRGB(95,25,235)
+        )
+    })
+    Gradient.Offset = Vector2.new(-0.5,0)
+    Gradient.Rotation = 0
+    Gradient.Parent = Text
+    local CachedAvatar = BaseAvatarCache[MatchedPlayer.UserId]
+    if CachedAvatar then
+        Avatar.Image = CachedAvatar
+    else
+        task.spawn(function()
+            local Success,Image = pcall(function()
+                return Players:GetUserThumbnailAsync(
+                    MatchedPlayer.UserId,
+                    Enum.ThumbnailType.HeadShot,
+                    Enum.ThumbnailSize.Size420x420
+                )
+            end)
+            if Success and Image then
+                BaseAvatarCache[MatchedPlayer.UserId] = Image
+                if Avatar and Avatar.Parent and PlotBaseESPs[PlotSign] and PlotBaseESPs[PlotSign].MatchedPlayer == MatchedPlayer then
+                    Avatar.Image = Image
+                end
+            end
+        end)
+    end
+    local Data = {
+        Plot = GetPlotForLabeledSign(PlotSign),
+        PlotSign = PlotSign,
+        SourceLabel = SourceLabel,
+        MatchedPlayer = MatchedPlayer,
+        Anchor = Anchor,
+        Billboard = Billboard,
+        Avatar = Avatar,
+        AvatarStroke = AvatarStroke,
+        Label = Text,
+        Gradient = Gradient
+    }
+    PlotBaseESPs[PlotSign] = Data
+    return Data
+end
+local function UpdatePlotSignESP(PlotSign)
+    local Data = PlotBaseESPs[PlotSign]
+    if not PlotSign
+    or not PlotSign.Parent then
+        if Data then
+            RemovePlotBaseESP(PlotSign)
+        end
+        return
+    end
+    local SourceLabel = GetBaseSurfaceLabel(PlotSign)
+    if not SourceLabel then
+        if Data then
+            RemovePlotBaseESP(PlotSign)
+        end
+        return
+    end
+    local MatchedPlayer = MatchPlotSignToListPlayer(PlotSign,SourceLabel.Text)
+    if not MatchedPlayer then
+        if Data then
+            RemovePlotBaseESP(PlotSign)
+        end
+        return
+    end
+    -- MatchedPlayer already comes from the fetched player list maps, so every
+    -- fetched player gets the same avatar/name base label without needing a trade.
+    if not Data
+    or Data.SourceLabel ~= SourceLabel
+    or Data.MatchedPlayer ~= MatchedPlayer
+    or not Data.Anchor
+    or not Data.Anchor.Parent
+    or not Data.Billboard
+    or not Data.Billboard.Parent then
+        if Data then
+            RemovePlotBaseESP(PlotSign)
+        end
+        Data = CreatePlotBaseESP(
+            PlotSign,
+            SourceLabel,
+            MatchedPlayer
+        )
+        if not Data then
+            return
+        end
+    end
+    Data.Plot = GetPlotForLabeledSign(PlotSign)
+    Data.SourceLabel = SourceLabel
+    Data.MatchedPlayer = MatchedPlayer
+    Data.Label.Text = MatchedPlayer.Name
+    Data.Label.TextColor3 = Color3.fromRGB(255,255,255)
+    if Data.Gradient then
+        Data.Gradient.Enabled = true
+    end
+    if Data.AvatarStroke then
+        Data.AvatarStroke.Color = Color3.fromRGB(185,80,255)
+    end
+    Data.Billboard.Enabled = true
+    local BoundsCF,BoundsSize = GetObjectBounds(PlotSign)
+    if BoundsCF
+    and BoundsSize
+    and Data.Anchor
+    and Data.Anchor.Parent then
+        Data.Anchor.CFrame = CFrame.new(
+            BoundsCF.Position.X,
+            BoundsCF.Position.Y + BoundsSize.Y / 2 + 4,
+            BoundsCF.Position.Z
+        )
+    end
+end
+local function ScanPlotBaseESPs()
+    RefreshBasePlayerList()
+    if not BaseListLoaded then
+        return
+    end
+    local Plots = Workspace:FindFirstChild("Plots")
+    if not Plots then
+        return
+    end
+    local Seen = {}
+    for _,Object in ipairs(Plots:GetDescendants()) do
+        if Object.Name == "PlotSign" then
+            Seen[Object] = true
+            UpdatePlotSignESP(Object)
+        end
+    end
+    local Remove = {}
+    for PlotSign in pairs(PlotBaseESPs) do
+        if not Seen[PlotSign]
+        or not PlotSign.Parent then
+            table.insert(Remove,PlotSign)
+        end
+    end
+    for _,PlotSign in ipairs(Remove) do
+        RemovePlotBaseESP(PlotSign)
+    end
+end
+local function FindBaseESPForPlayer(Player)
+    if not Player then
+        return nil
+    end
+    for _,Data in pairs(PlotBaseESPs) do
+        if Data.MatchedPlayer
+        and Data.MatchedPlayer.UserId == Player.UserId then
+            return Data
+        end
+    end
+    return nil
+end
+local function RefreshSelectedBaseESP()
+    ClearSelectedOverlay()
+end
+local function SetSelectedTradePlayer(Player)
+    SelectedTradePlayer = Player
+    if Player then
+        SelectedTradePlayersUntil[Player.UserId] =
+            os.clock() + 60
+    end
+    ClearSelectedOverlay()
+    ScanPlotBaseESPs()
+    RefreshSelectedBaseESP()
+end
+Connect(RunService.RenderStepped,function()
+    local Time = os.clock()
+    for _,BaseData in pairs(PlotBaseESPs) do
+        local Gradient = BaseData.Gradient
+        if Gradient
+        and Gradient.Parent
+        and Gradient.Enabled then
+            Gradient.Offset = Vector2.new(
+                math.sin(Time * 2.2) * 0.65,
+                0
+            )
+            Gradient.Rotation =
+                (Time * 32) % 360
+        end
+    end
+end)
+RefreshBasePlayerList()
+ScanPlotBaseESPs()
+task.spawn(function()
+    while Gui and Gui.Parent do
+        local Now = os.clock()
+        for UserId,ExpiresAt in pairs(SelectedTradePlayersUntil) do
+            if ExpiresAt <= Now then
+                SelectedTradePlayersUntil[UserId] = nil
+                if SelectedTradePlayer
+                and SelectedTradePlayer.UserId == UserId then
+                    SelectedTradePlayer = nil
+                    ClearSelectedOverlay()
+                end
+            end
+        end
+        ScanPlotBaseESPs()
+        RefreshSelectedBaseESP()
+        task.wait(0.15)
+    end
+end)
+local function FindNamedDescendant(ParentObject,Name,ClassName)
+    if not ParentObject then
+        return nil
+    end
+    for _,Object in ipairs(ParentObject:GetDescendants()) do
+        if Object.Name == Name
+        and (not ClassName or Object:IsA(ClassName)) then
+            return Object
+        end
+    end
+    return nil
+end
+local function PressGameButton(Button)
+    if not Button
+    or not Button:IsA("GuiButton")
+    or typeof(firesignal) ~= "function" then
+        return false
+    end
+    if typeof(getconnections) == "function" then
+        local Success,ConnectionsFound = pcall(function()
+            return getconnections(Button.MouseButton1Click)
+        end)
+        if Success
+        and ConnectionsFound
+        and #ConnectionsFound > 0 then
+            return pcall(function()
+                firesignal(Button.MouseButton1Click)
+            end)
+        end
+        Success,ConnectionsFound = pcall(function()
+            return getconnections(Button.Activated)
+        end)
+        if Success
+        and ConnectionsFound
+        and #ConnectionsFound > 0 then
+            return pcall(function()
+                firesignal(Button.Activated)
+            end)
+        end
+    end
+    local Success = pcall(function()
+        firesignal(Button.MouseButton1Click)
+    end)
+    if Success then
+        return true
+    end
+    return pcall(function()
+        firesignal(Button.Activated)
+    end)
+end
+local function EntryMatchesTradePlayer(Entry,Player)
+    local Username = Normalize(Player.Name)
+    if Normalize(Entry.Name) == Username then
+        return true
+    end
+    for _,Object in ipairs(Entry:GetDescendants()) do
+        if Object:IsA("TextLabel")
+        or Object:IsA("TextButton")
+        or Object:IsA("TextBox") then
+            if Normalize(Object.Text) == Username then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function FindTradeSendButton(PlayerList,Player)
+    local Visible = {}
+    for _,Entry in ipairs(PlayerList:GetChildren()) do
+        if EntryMatchesTradePlayer(Entry,Player) then
+            local Fill = Entry:FindFirstChild("Fill")
+            local Send = Fill and Fill:FindFirstChild("Send")
+            if Send and Send:IsA("GuiButton") then
+                return Send
+            end
+            Send = FindNamedDescendant(Entry,"Send","GuiButton")
+            if Send then
+                return Send
+            end
+        end
+        local Fill = Entry:FindFirstChild("Fill")
+        local Send = Fill and Fill:FindFirstChild("Send")
+        if Send
+        and Send:IsA("GuiButton")
+        and Send.Visible then
+            table.insert(Visible,Send)
+        end
+    end
+    if #Visible == 1 then
+        return Visible[1]
+    end
+    return nil
+end
+local LastTradedPlayer = nil
+local BaseViewerViewport
+local BaseViewerWorld
+local BaseViewerCamera
+local BaseViewerTitle
+local BaseViewerCurrentPlot
+local BaseViewerCurrentClone
+local BaseViewerSlotMarkers = {}
+local BaseViewerBoundsSize = Vector3.new(10,10,10)
+local BaseViewerDistance = 30
+local BaseViewerZoom = 1
+local BaseViewerYaw = math.rad(35)
+local BaseViewerPitch = math.rad(-25)
+local BaseViewerOrbitDragging = false
+local BaseViewerOrbitStart
+local BaseViewerWindowDragging = false
+local BaseViewerWindowStart
+local BaseViewerWindowPosition
+local BaseViewerBuildId = 0
+local BaseViewerIgnoreNames = {
+    InvisibleWalls = true,
+    Laser = true,
+    LaserHitbox = true,
+    Purchases = true,
+    Skin = true,
+    Unlock = true,
+    CashPad = true,
+    FriendPanel = true,
+    Model = true,
+    Multiplier = true,
+    PlotSign = true,
+    Spawn = true
+}
+local function CalculateBaseViewerBounds(Object)
+    local Min = Vector3.new(math.huge,math.huge,math.huge)
+    local Max = Vector3.new(-math.huge,-math.huge,-math.huge)
+    local Found = false
+    local function IncludePart(Part)
+        Found = true
+        local Half = Part.Size * 0.5
+        for X = -1,1,2 do
+            for Y = -1,1,2 do
+                for Z = -1,1,2 do
+                    local Corner = Part.CFrame:PointToWorldSpace(
+                        Vector3.new(Half.X*X,Half.Y*Y,Half.Z*Z)
+                    )
+                    Min = Vector3.new(
+                        math.min(Min.X,Corner.X),
+                        math.min(Min.Y,Corner.Y),
+                        math.min(Min.Z,Corner.Z)
+                    )
+                    Max = Vector3.new(
+                        math.max(Max.X,Corner.X),
+                        math.max(Max.Y,Corner.Y),
+                        math.max(Max.Z,Corner.Z)
+                    )
+                end
+            end
+        end
+    end
+    if Object:IsA("BasePart") then
+        IncludePart(Object)
+    end
+    for _,Descendant in ipairs(Object:GetDescendants()) do
+        if Descendant:IsA("BasePart") then
+            IncludePart(Descendant)
+        end
+    end
+    if not Found then
+        return Vector3.zero,Vector3.new(10,10,10)
+    end
+    return (Min+Max)*0.5,Max-Min
+end
+local function SetBaseViewerArchivable(Object)
+    local States = {}
+    local function SetOne(Item)
+        States[Item] = Item.Archivable
+        pcall(function()
+            Item.Archivable = true
+        end)
+    end
+    SetOne(Object)
+    for _,Item in ipairs(Object:GetDescendants()) do
+        SetOne(Item)
+    end
+    return States
+end
+local function RestoreBaseViewerArchivable(States)
+    for Object,State in pairs(States) do
+        pcall(function()
+            Object.Archivable = State
+        end)
+    end
+end
+local function CloneBaseViewerPlot(Plot)
+    local States = SetBaseViewerArchivable(Plot)
+    local Success,Clone = pcall(function()
+        return Plot:Clone()
+    end)
+    RestoreBaseViewerArchivable(States)
+    return Success and Clone or nil
+end
+local function PrepareBaseViewerClone(Clone)
+    for _,Child in ipairs(Clone:GetChildren()) do
+        if BaseViewerIgnoreNames[Child.Name] then
+            Child:Destroy()
+        end
+    end
+    local Destroy = {}
+    for _,Object in ipairs(Clone:GetDescendants()) do
+        if Object:IsA("Script")
+        or Object:IsA("LocalScript")
+        or Object:IsA("ModuleScript") then
+            table.insert(Destroy,Object)
+        elseif Object:IsA("BasePart") then
+            Object.Anchored = true
+            Object.CanCollide = false
+            Object.CanTouch = false
+            Object.CanQuery = false
+        elseif Object:IsA("ProximityPrompt") then
+            Object.Enabled = false
+        end
+    end
+    for _,Object in ipairs(Destroy) do
+        Object:Destroy()
+    end
+end
+local function RecenterBaseViewerClone(Clone)
+    local Center,Size = CalculateBaseViewerBounds(Clone)
+    local Offset = CFrame.new(-Center)
+    if Clone:IsA("BasePart") then
+        Clone.CFrame = Offset * Clone.CFrame
+    end
+    for _,Object in ipairs(Clone:GetDescendants()) do
+        if Object:IsA("BasePart") then
+            Object.CFrame = Offset * Object.CFrame
+        end
+    end
+    return Size
+end
+local function UpdateBaseViewerDistance()
+    if not BaseViewerViewport or not BaseViewerCamera then
+        return
+    end
+    local Width = math.max(BaseViewerViewport.AbsoluteSize.X,1)
+    local Height = math.max(BaseViewerViewport.AbsoluteSize.Y,1)
+    local Aspect = Width/Height
+    local Vertical = math.rad(BaseViewerCamera.FieldOfView)
+    local Horizontal = 2*math.atan(math.tan(Vertical/2)*Aspect)
+    local SmallFOV = math.min(Vertical,Horizontal)
+    local Radius = math.max(BaseViewerBoundsSize.Magnitude/2,5)
+    BaseViewerDistance = Radius/math.sin(SmallFOV/2)
+    BaseViewerDistance *= 1.1
+end
+local function UpdateBaseViewerCamera()
+    if not BaseViewerCurrentClone or not BaseViewerCamera then
+        return
+    end
+    local Rotation =
+        CFrame.Angles(0,BaseViewerYaw,0)
+        * CFrame.Angles(BaseViewerPitch,0,0)
+    local Direction = Rotation.LookVector
+    local Distance = BaseViewerDistance*BaseViewerZoom
+    BaseViewerCamera.CFrame = CFrame.lookAt(
+        -Direction*Distance,
+        Vector3.zero
+    )
+end
+local function ClearBaseViewerMarkers()
+    for _,Data in pairs(BaseViewerSlotMarkers) do
+        if Data.Gui then
+            Data.Gui:Destroy()
+        end
+    end
+    table.clear(BaseViewerSlotMarkers)
+end
+local function ClearBaseViewerWorld()
+    ClearBaseViewerMarkers()
+    if BaseViewerCurrentClone then
+        BaseViewerCurrentClone:Destroy()
+        BaseViewerCurrentClone = nil
+    end
+    if BaseViewerWorld then
+        for _,Child in ipairs(BaseViewerWorld:GetChildren()) do
+            Child:Destroy()
+        end
+    end
+end
+local function BaseViewerInsideNestedModel(Part,Slot)
+    local Parent = Part.Parent
+    while Parent and Parent ~= Slot do
+        if Parent:IsA("Model") then
+            return true
+        end
+        Parent = Parent.Parent
+    end
+    return false
+end
+local function GetBaseViewerPreferredPart(Slot)
+    local Names = {
+        "Podium","Platform","Base","MainRoot","Root","Stand","Pad"
+    }
+    for _,Name in ipairs(Names) do
+        local Direct = Slot:FindFirstChild(Name)
+        if Direct and Direct:IsA("BasePart") then
+            return Direct
+        end
+    end
+    for _,Name in ipairs(Names) do
+        local Object = Slot:FindFirstChild(Name,true)
+        if Object
+        and Object:IsA("BasePart")
+        and not BaseViewerInsideNestedModel(Object,Slot) then
+            return Object
+        end
+    end
+    return nil
+end
+local function GetBaseViewerSlotPart(Slot)
+    if Slot:IsA("BasePart") then
+        return Slot
+    end
+    local Preferred = GetBaseViewerPreferredPart(Slot)
+    if Preferred then
+        return Preferred
+    end
+    local DirectParts = {}
+    for _,Child in ipairs(Slot:GetChildren()) do
+        if Child:IsA("BasePart") then
+            table.insert(DirectParts,Child)
+        end
+    end
+    if #DirectParts > 0 then
+        table.sort(DirectParts,function(A,B)
+            local AreaA = A.Size.X*A.Size.Z
+            local AreaB = B.Size.X*B.Size.Z
+            if A.Anchored ~= B.Anchored then
+                return A.Anchored
+            end
+            if math.abs(A.Position.Y-B.Position.Y) > 0.25 then
+                return A.Position.Y < B.Position.Y
+            end
+            return AreaA > AreaB
+        end)
+        return DirectParts[1]
+    end
+    local Candidates = {}
+    for _,Object in ipairs(Slot:GetDescendants()) do
+        if Object:IsA("BasePart")
+        and not BaseViewerInsideNestedModel(Object,Slot) then
+            table.insert(Candidates,Object)
+        end
+    end
+    if #Candidates > 0 then
+        table.sort(Candidates,function(A,B)
+            local AreaA = A.Size.X*A.Size.Z
+            local AreaB = B.Size.X*B.Size.Z
+            if A.Anchored ~= B.Anchored then
+                return A.Anchored
+            end
+            if math.abs(A.Position.Y-B.Position.Y) > 0.25 then
+                return A.Position.Y < B.Position.Y
+            end
+            return AreaA > AreaB
+        end)
+        return Candidates[1]
+    end
+    if Slot:IsA("Model") and Slot.PrimaryPart then
+        return Slot.PrimaryPart
+    end
+    local LowestPart
+    local LowestY = math.huge
+    local BestArea = 0
+    for _,Object in ipairs(Slot:GetDescendants()) do
+        if Object:IsA("BasePart") then
+            local Area = Object.Size.X*Object.Size.Z
+            if Object.Position.Y < LowestY-0.25 then
+                LowestY = Object.Position.Y
+                BestArea = Area
+                LowestPart = Object
+            elseif math.abs(Object.Position.Y-LowestY) <= 0.25
+            and Area > BestArea then
+                BestArea = Area
+                LowestPart = Object
+            end
+        end
+    end
+    return LowestPart
+end
+local function GetBaseViewerSlotPosition(Slot)
+    local Part = GetBaseViewerSlotPart(Slot)
+    if not Part then
+        if Slot:IsA("Model") then
+            return Slot:GetPivot().Position
+        end
+        return Vector3.zero
+    end
+    local CF = Part.CFrame
+    local FrontOffset = math.max(Part.Size.Z*0.5,0.35)+0.3
+    return Part.Position
+        + CF.LookVector*FrontOffset
+        + CF.UpVector*0.08
+end
+local function CreateBaseViewerSlotMarker(Number,Slot)
+    local Circle = Instance.new("Frame")
+    Circle.Name = "Slot_"..tostring(Number)
+    Circle.AnchorPoint = Vector2.new(0.5,0.5)
+    Circle.Size = UDim2.fromOffset(17,17)
+    Circle.BackgroundColor3 = Color3.fromRGB(155,70,255)
+    Circle.BorderSizePixel = 0
+    Circle.Visible = false
+    Circle.ZIndex = 30
+    Circle.Parent = BaseViewerViewport
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(1,0)
+    Corner.Parent = Circle
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = Color3.fromRGB(220,175,255)
+    Stroke.Thickness = 1
+    Stroke.Transparency = 0.12
+    Stroke.Parent = Circle
+    local Text = Instance.new("TextLabel")
+    Text.Size = UDim2.fromScale(1,1)
+    Text.BackgroundTransparency = 1
+    Text.Text = tostring(Number)
+    Text.TextColor3 = Color3.new(1,1,1)
+    Text.Font = Enum.Font.GothamBold
+    Text.TextSize = 8
+    Text.TextXAlignment = Enum.TextXAlignment.Center
+    Text.TextYAlignment = Enum.TextYAlignment.Center
+    Text.ZIndex = 31
+    Text.Parent = Circle
+    BaseViewerSlotMarkers[Number] = {
+        Gui = Circle,
+        Slot = Slot,
+        Position = GetBaseViewerSlotPosition(Slot)
+    }
+end
+local function BuildBaseViewerSlotMarkers()
+    ClearBaseViewerMarkers()
+    if not BaseViewerCurrentClone then
+        return
+    end
+    local Podiums = BaseViewerCurrentClone:FindFirstChild("AnimalPodiums",true)
+    if not Podiums then
+        return
+    end
+    for I = 1,28 do
+        local Slot = Podiums:FindFirstChild(tostring(I))
+        if Slot then
+            CreateBaseViewerSlotMarker(I,Slot)
+        end
+    end
+end
+local function ProjectBaseViewerPoint(WorldPosition)
+    if not BaseViewerViewport or not BaseViewerCamera then
+        return nil
+    end
+    local WindowScale = 1
+    if BaseViewerFrame then
+        local ScaleObject = BaseViewerFrame:FindFirstChild("WuzzWindowScale")
+        if ScaleObject and ScaleObject:IsA("UIScale") then
+            WindowScale = math.max(tonumber(ScaleObject.Scale) or 1,0.001)
+        end
+    end
+    -- AbsoluteSize already includes UIScale. Slot markers use local offsets that
+    -- are scaled again with the window, so project in the viewport's unscaled
+    -- local coordinate space to keep every number pinned to its podium.
+    local AbsoluteSize = BaseViewerViewport.AbsoluteSize
+    local Size = Vector2.new(AbsoluteSize.X/WindowScale,AbsoluteSize.Y/WindowScale)
+    if Size.X <= 0 or Size.Y <= 0 then
+        return nil
+    end
+    local Relative = BaseViewerCamera.CFrame:PointToObjectSpace(WorldPosition)
+    local Depth = -Relative.Z
+    if Depth <= 0.01 then
+        return nil
+    end
+    local VerticalFOV = math.rad(BaseViewerCamera.FieldOfView)
+    local TanVertical = math.tan(VerticalFOV/2)
+    local Aspect = Size.X/Size.Y
+    local TanHorizontal = TanVertical*Aspect
+    local NDCX = Relative.X/(Depth*TanHorizontal)
+    local NDCY = Relative.Y/(Depth*TanVertical)
+    local X = (NDCX+1)*0.5*Size.X
+    local Y = (1-NDCY)*0.5*Size.Y
+    local Visible = X >= 0 and X <= Size.X and Y >= 0 and Y <= Size.Y
+    return Vector2.new(X,Y),Depth,Visible
+end
+local function UpdateBaseViewerMarkers()
+    if not BaseViewerCurrentClone then
+        return
+    end
+    for _,Data in pairs(BaseViewerSlotMarkers) do
+        local Circle = Data.Gui
+        if Circle then
+            local Position,Depth,Visible = ProjectBaseViewerPoint(Data.Position)
+            if Position and Visible then
+                Circle.Visible = true
+                Circle.Position = UDim2.fromOffset(Position.X,Position.Y)
+                local Ratio = BaseViewerDistance/math.max(Depth,1)
+                local MarkerSize = math.clamp(16*Ratio,11,18)
+                Circle.Size = UDim2.fromOffset(MarkerSize,MarkerSize)
+            else
+                Circle.Visible = false
+            end
+        end
+    end
+end
+local function GetMainPlotFromMatchedSign(Player)
+    if not Player then
+        return nil,nil
+    end
+    ScanPlotBaseESPs()
+    local BaseData = FindBaseESPForPlayer(Player)
+    if not BaseData then
+        return nil,nil
+    end
+    local PlotSign = BaseData.PlotSign
+    local Plot = BaseData.Plot
+    if (not Plot or not Plot.Parent) and PlotSign and PlotSign.Parent then
+        Plot = GetPlotForLabeledSign(PlotSign)
+        BaseData.Plot = Plot
+    end
+    if Plot and Plot.Parent then
+        return Plot,PlotSign
+    end
+    return nil,PlotSign
+end
+local function EnsureLastTradeBaseViewer()
+    if BaseViewerFrame and BaseViewerFrame.Parent then
+        return
+    end
+    BaseViewerFrame = Instance.new("Frame")
+    BaseViewerFrame.Name = "LastTradeBaseViewer"
+    BaseViewerFrame.Size = UDim2.fromOffset(430,620)
+    BaseViewerFrame.Position = SavedPosition(
+        "BaseViewer",
+        UDim2.new(0.5,-215,0.5,-310)
+    )
+    BaseViewerFrame.BackgroundColor3 = Color3.fromRGB(15,15,20)
+    BaseViewerFrame.BorderSizePixel = 0
+    BaseViewerFrame.ClipsDescendants = true
+    BaseViewerFrame.Active = true
+    BaseViewerFrame.Visible = false
+    BaseViewerFrame.ZIndex = 20
+    BaseViewerFrame.Parent = Gui
+    local MainCorner = Instance.new("UICorner")
+    MainCorner.CornerRadius = UDim.new(0,12)
+    MainCorner.Parent = BaseViewerFrame
+    local MainStroke = Instance.new("UIStroke")
+    MainStroke.Thickness = 2
+    MainStroke.Color = Color3.fromRGB(180,70,255)
+    MainStroke.Parent = BaseViewerFrame
+    local Header2 = Instance.new("Frame")
+    Header2.Size = UDim2.new(1,0,0,48)
+    Header2.BackgroundColor3 = Color3.fromRGB(23,23,31)
+    Header2.BorderSizePixel = 0
+    Header2.Active = true
+    Header2.ZIndex = 22
+    Header2.Parent = BaseViewerFrame
+    local HeaderCorner = Instance.new("UICorner")
+    HeaderCorner.CornerRadius = UDim.new(0,12)
+    HeaderCorner.Parent = Header2
+    BaseViewerTitle = Instance.new("TextLabel")
+    BaseViewerTitle.Size = UDim2.new(1,-30,1,0)
+    BaseViewerTitle.Position = UDim2.new(0,15,0,0)
+    BaseViewerTitle.BackgroundTransparency = 1
+    BaseViewerTitle.Text = "Last Trade Base"
+    BaseViewerTitle.TextColor3 = Color3.fromRGB(205,130,255)
+    BaseViewerTitle.Font = Enum.Font.GothamBold
+    BaseViewerTitle.TextSize = 19
+    BaseViewerTitle.TextXAlignment = Enum.TextXAlignment.Left
+    BaseViewerTitle.ZIndex = 23
+    BaseViewerTitle.Parent = Header2
+    local PreviewContainer = Instance.new("Frame")
+    PreviewContainer.Size = UDim2.new(1,-8,1,-57)
+    PreviewContainer.Position = UDim2.new(0,4,0,52)
+    PreviewContainer.BackgroundColor3 = Color3.fromRGB(9,9,13)
+    PreviewContainer.BorderSizePixel = 0
+    PreviewContainer.ClipsDescendants = true
+    PreviewContainer.ZIndex = 21
+    PreviewContainer.Parent = BaseViewerFrame
+    local PreviewCorner = Instance.new("UICorner")
+    PreviewCorner.CornerRadius = UDim.new(0,9)
+    PreviewCorner.Parent = PreviewContainer
+    BaseViewerViewport = Instance.new("ViewportFrame")
+    BaseViewerViewport.Size = UDim2.new(1,-8,1,-8)
+    BaseViewerViewport.Position = UDim2.new(0,4,0,4)
+    BaseViewerViewport.BackgroundColor3 = Color3.fromRGB(6,6,10)
+    BaseViewerViewport.BorderSizePixel = 0
+    BaseViewerViewport.Ambient = Color3.fromRGB(190,190,200)
+    BaseViewerViewport.LightColor = Color3.fromRGB(255,255,255)
+    BaseViewerViewport.LightDirection = Vector3.new(-1,-1,-0.5)
+    BaseViewerViewport.ClipsDescendants = true
+    BaseViewerViewport.ZIndex = 22
+    BaseViewerViewport.Parent = PreviewContainer
+    local ViewportCorner = Instance.new("UICorner")
+    ViewportCorner.CornerRadius = UDim.new(0,8)
+    ViewportCorner.Parent = BaseViewerViewport
+    BaseViewerWorld = Instance.new("WorldModel")
+    BaseViewerWorld.Name = "LastTradeFakeWorld"
+    BaseViewerWorld.Parent = BaseViewerViewport
+    BaseViewerCamera = Instance.new("Camera")
+    BaseViewerCamera.FieldOfView = 50
+    BaseViewerCamera.Parent = BaseViewerViewport
+    BaseViewerViewport.CurrentCamera = BaseViewerCamera
+    Connect(BaseViewerViewport.InputBegan,function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch then
+            BaseViewerOrbitDragging = true
+            BaseViewerOrbitStart = Input.Position
+        end
+    end)
+    Connect(BaseViewerViewport.InputEnded,function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch then
+            BaseViewerOrbitDragging = false
+        end
+    end)
+    Connect(Header2.InputBegan,function(Input)
+        if SavedGuiPositions.GuiLocked == true then
+            return
+        end
+        if Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch then
+            BaseViewerWindowDragging = true
+            BaseViewerWindowStart = Input.Position
+            BaseViewerWindowPosition = BaseViewerFrame.Position
+        end
+    end)
+    Connect(Header2.InputEnded,function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch then
+            if BaseViewerWindowDragging and SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+            BaseViewerWindowDragging = false
+        end
+    end)
+    Connect(UserInputService.InputChanged,function(Input)
+        if BaseViewerOrbitDragging and (
+            Input.UserInputType == Enum.UserInputType.MouseMovement
+            or Input.UserInputType == Enum.UserInputType.Touch
+        ) then
+            local Delta = Input.Position-BaseViewerOrbitStart
+            BaseViewerOrbitStart = Input.Position
+            BaseViewerYaw -= Delta.X*0.008
+            BaseViewerPitch -= Delta.Y*0.008
+            BaseViewerPitch = math.clamp(
+                BaseViewerPitch,
+                math.rad(-85),
+                math.rad(85)
+            )
+            UpdateBaseViewerCamera()
+        elseif Input.UserInputType == Enum.UserInputType.MouseWheel then
+            local Mouse = UserInputService:GetMouseLocation()
+            local Position = BaseViewerViewport.AbsolutePosition
+            local Size = BaseViewerViewport.AbsoluteSize
+            if Mouse.X >= Position.X
+            and Mouse.X <= Position.X+Size.X
+            and Mouse.Y >= Position.Y
+            and Mouse.Y <= Position.Y+Size.Y then
+                BaseViewerZoom -= Input.Position.Z*0.1
+                BaseViewerZoom = math.clamp(BaseViewerZoom,0.2,5)
+                UpdateBaseViewerCamera()
+            end
+        elseif BaseViewerWindowDragging and SavedGuiPositions.GuiLocked ~= true and (
+            Input.UserInputType == Enum.UserInputType.MouseMovement
+            or Input.UserInputType == Enum.UserInputType.Touch
+        ) then
+            local Delta = Input.Position-BaseViewerWindowStart
+            BaseViewerFrame.Position = UDim2.new(
+                BaseViewerWindowPosition.X.Scale,
+                BaseViewerWindowPosition.X.Offset+Delta.X,
+                BaseViewerWindowPosition.Y.Scale,
+                BaseViewerWindowPosition.Y.Offset+Delta.Y
+            )
+        end
+    end)
+    Connect(UserInputService.InputEnded,function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1
+        or Input.UserInputType == Enum.UserInputType.Touch then
+            if BaseViewerWindowDragging and SaveGuiPositions then
+                pcall(SaveGuiPositions)
+            end
+            BaseViewerWindowDragging = false
+        end
+    end)
+    Connect(BaseViewerViewport:GetPropertyChangedSignal("AbsoluteSize"),function()
+        if BaseViewerCurrentClone then
+            UpdateBaseViewerDistance()
+            UpdateBaseViewerCamera()
+        end
+    end)
+    Connect(RunService.RenderStepped,function()
+        if BaseViewerFrame
+        and BaseViewerFrame.Parent
+        and BaseViewerFrame.Visible then
+            UpdateBaseViewerMarkers()
+        end
+    end)
+end
+local function ShowLastTradedBase(Player,ForceShow)
+    if not Player then
+        return false
+    end
+    EnsureLastTradeBaseViewer()
+    BaseViewerBuildId += 1
+    local BuildId = BaseViewerBuildId
+    if ForceShow ~= false then
+        BaseViewerFrame.Visible = true
+    end
+    BaseViewerTitle.Text = Player.Name
+    local Plot = GetMainPlotFromMatchedSign(Player)
+    if not Plot then
+        ClearBaseViewerWorld()
+        BaseViewerCurrentPlot = nil
+        BaseViewerTitle.Text = Player.Name
+        return false
+    end
+    ClearBaseViewerWorld()
+    BaseViewerCurrentPlot = Plot
+    BaseViewerTitle.Text = Player.Name
+    local Clone = CloneBaseViewerPlot(Plot)
+    if BuildId ~= BaseViewerBuildId then
+        if Clone then Clone:Destroy() end
+        return false
+    end
+    if not Clone then
+        BaseViewerTitle.Text = Player.Name
+        return false
+    end
+    PrepareBaseViewerClone(Clone)
+    Clone.Name = "Fake_"..Plot.Name
+    Clone.Parent = BaseViewerWorld
+    BaseViewerCurrentClone = Clone
+    BaseViewerBoundsSize = RecenterBaseViewerClone(Clone)
+    BaseViewerYaw = math.rad(35)
+    BaseViewerPitch = math.rad(-25)
+    BaseViewerZoom = 1
+    UpdateBaseViewerDistance()
+    UpdateBaseViewerCamera()
+    BuildBaseViewerSlotMarkers()
+    BaseViewerTitle.Text = Player.Name
+    return true
+end
+local function SetLastTradedBase(Player)
+    Env.WuzzBasePreviewPlayer = nil
+    LastTradedPlayer = Player
+    ShowLastTradedBase(Player,true)
+end
+task.spawn(function()
+    while Gui and Gui.Parent do
+        local ViewerPlayer = Env.WuzzBasePreviewPlayer or LastTradedPlayer
+        if ViewerPlayer
+        and ViewerPlayer.Parent == Players
+        and BaseViewerFrame
+        and BaseViewerFrame.Parent
+        and BaseViewerFrame.Visible then
+            local Plot = GetMainPlotFromMatchedSign(ViewerPlayer)
+            if Plot and (not BaseViewerCurrentClone or BaseViewerCurrentPlot ~= Plot) then
+                ShowLastTradedBase(ViewerPlayer,false)
+            elseif not Plot and BaseViewerTitle then
+                BaseViewerTitle.Text = ViewerPlayer.Name
+            end
+        end
+        task.wait(0.8)
+    end
+end)
+local function TradeWithPlayer(Player,Button)
+    if Trading then
+        return
+    end
+    Trading = true
+    local OldText = Button.Text
+    Button.Text = "..."
+    local Completed = false
+    local Success,Error = pcall(function()
+        local PlayerGui = LP:WaitForChild("PlayerGui")
+        local LeftCenter = PlayerGui:FindFirstChild("LeftCenter")
+        if not LeftCenter then
+            error("LeftCenter missing")
+        end
+        local OpenButton = FindNamedDescendant(
+            LeftCenter,
+            "TradePlayerList",
+            "GuiButton"
+        )
+        if not OpenButton then
+            error("TradePlayerList button missing")
+        end
+        if not PressGameButton(OpenButton) then
+            error("TradePlayerList button failed")
+        end
+        task.wait(0.25)
+        local TradeOuter = PlayerGui:FindFirstChild("TradePlayerList")
+            or PlayerGui:WaitForChild("TradePlayerList",5)
+        if not TradeOuter then
+            error("TradePlayerList GUI missing")
+        end
+        local TradeMain = TradeOuter:FindFirstChild("TradePlayerList")
+            or TradeOuter:WaitForChild("TradePlayerList",5)
+        if not TradeMain then
+            error("Inner TradePlayerList missing")
+        end
+        local Sections = TradeMain:FindFirstChild("Sections")
+            or TradeMain:WaitForChild("Sections",5)
+        local PlayersSection = Sections
+            and (Sections:FindFirstChild("Players")
+            or Sections:WaitForChild("Players",5))
+        local SearchFrame = PlayersSection
+            and (PlayersSection:FindFirstChild("SearchFrame")
+            or PlayersSection:WaitForChild("SearchFrame",5))
+        local SearchBox = SearchFrame
+            and (SearchFrame:FindFirstChild("SearchBox")
+            or SearchFrame:WaitForChild("SearchBox",5))
+        if not SearchBox
+        or not SearchBox:IsA("TextBox") then
+            error("SearchBox missing")
+        end
+        SearchBox:CaptureFocus()
+        task.wait(0.05)
+        SearchBox.Text = Player.Name
+        task.wait(0.08)
+        SearchBox:ReleaseFocus(true)
+        task.wait(0.25)
+        local PlayerList = PlayersSection:FindFirstChild("List")
+            or PlayersSection:WaitForChild("List",5)
+        if not PlayerList then
+            error("Player list missing")
+        end
+        local SendButton
+        local Timeout = os.clock() + 8
+        repeat
+            SendButton = FindTradeSendButton(PlayerList,Player)
+            if not SendButton then
+                task.wait(0.1)
+            end
+        until SendButton or os.clock() >= Timeout
+        if not SendButton then
+            error("Send button not found for "..Player.Name)
+        end
+        if not PressGameButton(SendButton) then
+            error("Send button failed")
+        end
+        task.wait(0.4)
+        local Header = TradeMain:FindFirstChild("Header")
+        local TradeClose = Header and Header:FindFirstChild("Close")
+        if TradeClose and TradeClose:IsA("GuiButton") then
+            PressGameButton(TradeClose)
+        end
+        Completed = true
+    end)
+    if not Success then
+        warn(Error)
+    end
+    if Completed then
+        SetSelectedTradePlayer(Player)
+        SetLastTradedBase(Player)
+    end
+    if Button.Parent then
+        Button.Text = Completed and "✓" or "×"
+    end
+    task.wait(0.6)
+    if Button.Parent then
+        Button.Text = OldText
+    end
+    Trading = false
+end
+local Rows = {}
+local function RemoveRow(UserId)
+    local Row = Rows[UserId]
+    if Row then
+        Rows[UserId] = nil
+        Row:Destroy()
+    end
+end
+local function ClearRows()
+    local IDs = {}
+    for UserId in pairs(Rows) do
+        table.insert(IDs,UserId)
+    end
+    for _,UserId in ipairs(IDs) do
+        RemoveRow(UserId)
+    end
+end
+local function CreateRow(Player)
+    if Rows[Player.UserId] then
+        return
+    end
+    local Row = Instance.new("Frame")
+    Row.Name = tostring(Player.UserId)
+    Row.Size = UDim2.new(1,-4,0,68)
+    Row.BackgroundColor3 = Color3.fromRGB(31,18,45)
+    Row.BackgroundTransparency = 0.08
+    Row.BorderSizePixel = 0
+    Row.ZIndex = 6
+    Row.Parent = List
+    local RowCorner = Instance.new("UICorner")
+    RowCorner.CornerRadius = UDim.new(0,11)
+    RowCorner.Parent = Row
+    local RowStroke = Instance.new("UIStroke")
+    RowStroke.Color = Color3.fromRGB(125,52,188)
+    RowStroke.Transparency = 0.3
+    RowStroke.Parent = Row
+    local Avatar = Instance.new("ImageLabel")
+    Avatar.Name = "Avatar"
+    Avatar.Size = UDim2.fromOffset(48,48)
+    Avatar.Position = UDim2.fromOffset(9,10)
+    Avatar.BackgroundColor3 = Color3.fromRGB(54,28,76)
+    Avatar.BorderSizePixel = 0
+    Avatar.ScaleType = Enum.ScaleType.Crop
+    Avatar.ZIndex = 7
+    Avatar.Parent = Row
+    local AvatarCorner = Instance.new("UICorner")
+    AvatarCorner.CornerRadius = UDim.new(1,0)
+    AvatarCorner.Parent = Avatar
+    local AvatarStroke = Instance.new("UIStroke")
+    AvatarStroke.Color = Color3.fromRGB(150,65,215)
+    AvatarStroke.Transparency = 0.25
+    AvatarStroke.Parent = Avatar
+    task.spawn(function()
+        local Success,Image = pcall(function()
+            return Players:GetUserThumbnailAsync(
+                Player.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size150x150
+            )
+        end)
+        if Success and Avatar.Parent then
+            Avatar.Image = Image
+        end
+    end)
+    local Display = Instance.new("TextLabel")
+    Display.Name = "DisplayName"
+    Display.Size = UDim2.new(1,-232,0,22)
+    Display.Position = UDim2.fromOffset(66,12)
+    Display.BackgroundTransparency = 1
+    Display.Text = Player.DisplayName
+    Display.TextColor3 = Color3.fromRGB(246,235,255)
+    Display.Font = Enum.Font.GothamBold
+    Display.TextSize = 13
+    Display.TextXAlignment = Enum.TextXAlignment.Left
+    Display.TextTruncate = Enum.TextTruncate.AtEnd
+    Display.ZIndex = 7
+    Display.Parent = Row
+    local Username = Instance.new("TextLabel")
+    Username.Name = "Username"
+    Username.Size = UDim2.new(1,-232,0,18)
+    Username.Position = UDim2.fromOffset(66,36)
+    Username.BackgroundTransparency = 1
+    Username.Text = "@"..Player.Name
+    Username.TextColor3 = Color3.fromRGB(173,151,193)
+    Username.Font = Enum.Font.GothamMedium
+    Username.TextSize = 10
+    Username.TextXAlignment = Enum.TextXAlignment.Left
+    Username.TextTruncate = Enum.TextTruncate.AtEnd
+    Username.ZIndex = 7
+    Username.Parent = Row
+    local Base = Instance.new("TextButton")
+    Base.Name = "Base"
+    Base.Size = UDim2.fromOffset(58,34)
+    Base.Position = UDim2.new(1,-153,0.5,-17)
+    Base.BackgroundColor3 = Color3.fromRGB(69,36,98)
+    Base.BorderSizePixel = 0
+    Base.Text = "BASE"
+    Base.TextColor3 = Color3.fromRGB(245,226,255)
+    Base.Font = Enum.Font.GothamBold
+    Base.TextSize = 10
+    Base.AutoButtonColor = false
+    Base.ZIndex = 8
+    Base.Parent = Row
+    local BaseCorner = Instance.new("UICorner")
+    BaseCorner.CornerRadius = UDim.new(0,9)
+    BaseCorner.Parent = Base
+    local BaseStroke = Instance.new("UIStroke")
+    BaseStroke.Color = Color3.fromRGB(174,83,235)
+    BaseStroke.Transparency = 0.22
+    BaseStroke.Parent = Base
+    Connect(Base.MouseButton1Click,function()
+        -- Refresh/scan first so BASE resolves through the exact same matched-plot
+        -- path used after a successful trade, without actually sending a trade.
+        RefreshBasePlayerList()
+        ScanPlotBaseESPs()
+        Env.WuzzBasePreviewPlayer = Player
+        ShowLastTradedBase(Player,true)
+    end)
+    local Trade = Instance.new("TextButton")
+    Trade.Name = "Trade"
+    Trade.Size = UDim2.fromOffset(78,34)
+    Trade.Position = UDim2.new(1,-87,0.5,-17)
+    Trade.BackgroundColor3 = Color3.fromRGB(108,42,172)
+    Trade.BorderSizePixel = 0
+    Trade.Text = "TRADE"
+    Trade.TextColor3 = Color3.fromRGB(255,245,255)
+    Trade.Font = Enum.Font.GothamBold
+    Trade.TextSize = 11
+    Trade.AutoButtonColor = false
+    Trade.ZIndex = 8
+    Trade.Parent = Row
+    local TradeCorner = Instance.new("UICorner")
+    TradeCorner.CornerRadius = UDim.new(0,9)
+    TradeCorner.Parent = Trade
+    local TradeStroke = Instance.new("UIStroke")
+    TradeStroke.Color = Color3.fromRGB(200,100,255)
+    TradeStroke.Transparency = 0.15
+    TradeStroke.Parent = Trade
+    Connect(Trade.MouseButton1Click,function()
+        task.spawn(function()
+            TradeWithPlayer(Player,Trade)
+        end)
+    end)
+    Rows[Player.UserId] = Row
+end
+Env.WuzzCoreScanner = {
+    VoiceWords = {
+        "voice",
+        "voicechat",
+        "mute",
+        "unmute",
+        "speaker",
+        "microphone",
+        "mic"
+    },
+    Generation = 0,
+    Running = false,
+    LastScan = 0,
+    Saved = {},
+    SavedOrder = {}
+}
+Env.WuzzCoreScanner.Lower = function(Value)
+    return string.lower(tostring(Value or ""))
+end
+Env.WuzzCoreScanner.NormalizeText = function(Value)
+    return Env.WuzzCoreScanner.Lower(Value)
+        :gsub("<.->","")
+        :gsub("^%s+","")
+        :gsub("%s+$","")
+        :gsub("^@","")
+end
+Env.WuzzCoreScanner.Text = function(Object)
+    local Success,Value = pcall(function()
+        return Object.ContentText
+    end)
+    if Success and Value and Value ~= "" then
+        return Value
+    end
+    Success,Value = pcall(function()
+        return Object.Text
+    end)
+    if Success then
+        return Value or ""
+    end
+    return ""
+end
+Env.WuzzCoreScanner.IsOurObject = function(Object)
+    local Current = Object
+    while Current do
+        if Current == Gui then
+            return true
+        end
+        if Current == CoreGui then
+            break
+        end
+        Current = Current.Parent
+    end
+    return false
+end
+Env.WuzzCoreScanner.IsVisible = function(Object)
+    if not Object:IsA("GuiObject") or not Object.Visible then
+        return false
+    end
+    local Size = Object.AbsoluteSize
+    if Size.X <= 0 or Size.Y <= 0 then
+        return false
+    end
+    local Current = Object.Parent
+    while Current and Current ~= CoreGui do
+        if Current:IsA("GuiObject") and not Current.Visible then
+            return false
+        end
+        Current = Current.Parent
+    end
+    return true
+end
+Env.WuzzCoreScanner.IsMenuOpen = function()
+    local Success,Open = pcall(function()
+        return GuiService.MenuIsOpen
+    end)
+    return Success and Open == true
+end
+Env.WuzzCoreScanner.HasWord = function(Value)
+    local S = Env.WuzzCoreScanner
+    local Text = S.Lower(Value):gsub("[%s_%-]","")
+    for _,Word in ipairs(S.VoiceWords) do
+        local Needle = tostring(Word):gsub("[%s_%-]","")
+        if Needle ~= "" and string.find(Text,Needle,1,true) then
+            return true
+        end
+    end
+    return false
+end
+Env.WuzzCoreScanner.HasAudioDevice = function(Player)
+    if not Player or Player.Parent ~= Players then
+        return false
+    end
+    local Success,Found = pcall(function()
+        return Player:FindFirstChildWhichIsA("AudioDeviceInput",true) ~= nil
+    end)
+    return Success and Found == true
+end
+Env.WuzzCoreScanner.AnalyzeRow = function(Row,Player)
+    local S = Env.WuzzCoreScanner
+    local Result = {
+        Buttons = 0,
+        HasUsername = false,
+        HasDisplayName = false,
+        HasVoiceWord = false,
+        HasNamedVoiceControl = false,
+        HasRedVoiceMark = false,
+        HasAudioDevice = S.HasAudioDevice(Player)
+    }
+    local SeenButtons = {}
+    local TargetUsername = S.NormalizeText(Player.Name)
+    local TargetDisplay = S.NormalizeText(Player.DisplayName)
+    local RowPosition = Row.AbsolutePosition
+    local RowSize = Row.AbsoluteSize
+    local RowRight = RowPosition.X + RowSize.X
+    local RowBottom = RowPosition.Y + RowSize.Y
+
+    local function Inspect(Object)
+        if S.IsOurObject(Object) then
+            return
+        end
+        if (Object:IsA("TextLabel") or Object:IsA("TextButton")) and S.IsVisible(Object) then
+            local Text = S.NormalizeText(S.Text(Object))
+            if Text == TargetUsername then
+                Result.HasUsername = true
+            end
+            if Text == TargetDisplay then
+                Result.HasDisplayName = true
+            end
+            if S.HasWord(Text) then
+                Result.HasVoiceWord = true
+            end
+        end
+
+        local Name = S.Lower(Object.Name)
+        if S.HasWord(Name) then
+            Result.HasVoiceWord = true
+            if Object:IsA("GuiButton") or Object:IsA("ImageLabel") then
+                Result.HasNamedVoiceControl = true
+            end
+        end
+
+        local Success,Attributes = pcall(function()
+            return Object:GetAttributes()
+        end)
+        if Success then
+            for Key,Value in pairs(Attributes) do
+                if S.HasWord(Key) or S.HasWord(Value) then
+                    Result.HasVoiceWord = true
+                    Result.HasNamedVoiceControl = true
+                    break
+                end
+            end
+        end
+
+        if (Object:IsA("ImageButton") or Object:IsA("TextButton")) and S.IsVisible(Object) then
+            local Size = Object.AbsoluteSize
+            local Position = Object.AbsolutePosition
+            local CenterX = Position.X + Size.X*0.5
+            local CenterY = Position.Y + Size.Y*0.5
+            if Size.X >= 22
+            and Size.X <= 72
+            and Size.Y >= 22
+            and Size.Y <= 72
+            and math.abs(Size.X-Size.Y) <= 20
+            and CenterX >= RowPosition.X
+            and CenterX <= RowRight
+            and CenterY >= RowPosition.Y
+            and CenterY <= RowBottom then
+                local Key = math.floor(CenterX/3)..":"..math.floor(CenterY/3)
+                if not SeenButtons[Key] then
+                    SeenButtons[Key] = true
+                    Result.Buttons += 1
+                end
+            end
+        end
+
+        if not Result.HasRedVoiceMark
+        and (Object:IsA("ImageLabel") or Object:IsA("ImageButton"))
+        and S.IsVisible(Object) then
+            local Size = Object.AbsoluteSize
+            if Size.X <= 72 and Size.Y <= 72 then
+                local Color = Object.ImageColor3
+                if Color.R > 0.65
+                and Color.R > Color.G*1.4
+                and Color.R > Color.B*1.2 then
+                    Result.HasRedVoiceMark = true
+                end
+            end
+        end
+    end
+
+    Inspect(Row)
+    for _,Object in ipairs(Row:GetDescendants()) do
+        Inspect(Object)
+    end
+
+    -- Strong signals are preferred. The 4-button fallback is kept only inside an
+    -- exact, single-player row; unlike the old scanner it can no longer count
+    -- buttons belonging to neighboring player rows or the whole People panel.
+    Result.HasVoice = Result.HasAudioDevice
+        or Result.HasNamedVoiceControl
+        or (Result.HasVoiceWord and Result.Buttons >= 1)
+        or (Result.HasUsername and Result.Buttons >= 4)
+        or (Result.HasUsername and Result.Buttons >= 3 and Result.HasRedVoiceMark)
+    return Result
+end
+Env.WuzzCoreScanner.ScoreRow = function(Row,Player,Cache)
+    local S = Env.WuzzCoreScanner
+    if not Row:IsA("GuiObject") or not S.IsVisible(Row) then
+        return -math.huge,false,nil
+    end
+    local Size = Row.AbsoluteSize
+    if Size.X < 220 or Size.Y < 34 or Size.Y > 115 then
+        return -math.huge,false,nil
+    end
+    local PerRow = Cache[Row]
+    if not PerRow then
+        PerRow = {}
+        Cache[Row] = PerRow
+    end
+    local Analysis = PerRow[Player.UserId]
+    if not Analysis then
+        Analysis = S.AnalyzeRow(Row,Player)
+        PerRow[Player.UserId] = Analysis
+    end
+    if not Analysis.HasUsername then
+        return -math.huge,false,Analysis
+    end
+    local Score = 80
+    if Size.Y >= 45 and Size.Y <= 90 then
+        Score += 25
+    end
+    if Size.X >= 360 then
+        Score += 10
+    end
+    if Analysis.HasDisplayName then
+        Score += 25
+    end
+    if Analysis.HasNamedVoiceControl then
+        Score += 80
+    elseif Analysis.HasVoiceWord then
+        Score += 50
+    end
+    if Analysis.HasAudioDevice then
+        Score += 100
+    end
+    if Analysis.Buttons >= 3 then
+        Score += 10
+    end
+    if Analysis.Buttons >= 4 then
+        Score += 20
+    end
+    return Score,Analysis.HasVoice,Analysis
+end
+Env.WuzzCoreScanner.FindExactRow = function(Label,Player,Cache)
+    local S = Env.WuzzCoreScanner
+    local BestRow = nil
+    local BestScore = -math.huge
+    local BestVoice = false
+    local Current = Label.Parent
+    local Depth = 0
+    while Current and Current ~= CoreGui and Depth < 7 do
+        if Current:IsA("GuiObject") then
+            local Score,HasVoice = S.ScoreRow(Current,Player,Cache)
+            if Score > BestScore then
+                BestScore = Score
+                BestVoice = HasVoice
+                BestRow = Current
+            end
+        end
+        Current = Current.Parent
+        Depth += 1
+    end
+    return BestRow,BestScore,BestVoice
+end
+Env.WuzzCoreScanner.Scan = function()
+    local S = Env.WuzzCoreScanner
+    if not S or not S.IsMenuOpen() then
+        return nil,false
+    end
+    local Success,Descendants = pcall(function()
+        return CoreGui:GetDescendants()
+    end)
+    if not Success or not Descendants then
+        return nil,false
+    end
+
+    local PlayerByUsername = {}
+    local DetectedById = {}
+    for _,Player in ipairs(Players:GetPlayers()) do
+        if Player ~= LP then
+            PlayerByUsername[S.NormalizeText(Player.Name)] = Player
+            if S.HasAudioDevice(Player) then
+                DetectedById[Player.UserId] = Player
+            end
+        end
+    end
+
+    local Best = {}
+    local Cache = {}
+    for _,Object in ipairs(Descendants) do
+        if not S.IsOurObject(Object)
+        and (Object:IsA("TextLabel") or Object:IsA("TextButton"))
+        and S.IsVisible(Object) then
+            local Player = PlayerByUsername[S.NormalizeText(S.Text(Object))]
+            if Player then
+                local Row,Score,HasVoice = S.FindExactRow(Object,Player,Cache)
+                if Row and Score > -math.huge then
+                    local Previous = Best[Player.UserId]
+                    if not Previous or Score > Previous.Score then
+                        Best[Player.UserId] = {
+                            Player = Player,
+                            Row = Row,
+                            Score = Score,
+                            HasVoice = HasVoice
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    for UserId,Entry in pairs(Best) do
+        if Entry.Score >= 80 and Entry.HasVoice then
+            DetectedById[UserId] = Entry.Player
+        end
+    end
+
+    local Detected = {}
+    for _,Player in pairs(DetectedById) do
+        if Player and Player.Parent == Players then
+            table.insert(Detected,Player)
+        end
+    end
+    table.sort(Detected,function(A,B)
+        local AD = string.lower(tostring(A.DisplayName or A.Name))
+        local BD = string.lower(tostring(B.DisplayName or B.Name))
+        if AD == BD then
+            return string.lower(A.Name) < string.lower(B.Name)
+        end
+        return AD < BD
+    end)
+    return Detected,true
+end
+Env.WuzzCoreScanner.Store = function(List)
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return
+    end
+    for _,Player in ipairs(List or {}) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and not S.Saved[Player.UserId] then
+            S.Saved[Player.UserId] = Player
+            table.insert(S.SavedOrder,Player)
+        end
+    end
+    table.sort(S.SavedOrder,function(A,B)
+        return string.lower(A.DisplayName) < string.lower(B.DisplayName)
+    end)
+end
+Env.WuzzCoreScanner.RenderSaved = function()
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return
+    end
+    local Cleaned = {}
+    for _,Player in ipairs(S.SavedOrder) do
+        if Player
+        and Player ~= LP
+        and Player.Parent == Players
+        and S.Saved[Player.UserId] == Player then
+            table.insert(Cleaned,Player)
+        else
+            if Player then
+                S.Saved[Player.UserId] = nil
+            end
+        end
+    end
+    S.SavedOrder = Cleaned
+    SetFetchedBasePlayers(Cleaned)
+    ClearRows()
+    for _,Player in ipairs(Cleaned) do
+        CreateRow(Player)
+    end
+    RefreshBasePlayerList()
+    ScanPlotBaseESPs()
+    RefreshSelectedBaseESP()
+end
+Env.WuzzCoreScanner.Refresh = function()
+    local S = Env.WuzzCoreScanner
+    if not S then
+        return false
+    end
+    local Detected,Scanned = S.Scan()
+    if not Scanned then
+        return false
+    end
+    S.Store(Detected)
+    S.RenderSaved()
+    return true
+end
+Env.WuzzCoreScanner.Schedule = function(Delay)
+    local S = Env.WuzzCoreScanner
+    if not S or not S.IsMenuOpen() then
+        return
+    end
+    local Now = os.clock()
+    if Now-S.LastScan < 0.2 then
+        return
+    end
+    S.Generation += 1
+    local Generation = S.Generation
+    task.delay(Delay or 0.15,function()
+        local Current = Env.WuzzCoreScanner
+        if not Current
+        or not Gui
+        or not Gui.Parent
+        or Generation ~= Current.Generation
+        or not Current.IsMenuOpen()
+        or Current.Running then
+            return
+        end
+        Current.Running = true
+        Current.LastScan = os.clock()
+        pcall(Current.Refresh)
+        Current.Running = false
+    end)
+end
+Connect(
+    GuiService:GetPropertyChangedSignal("MenuIsOpen"),
+    function()
+        local S = Env.WuzzCoreScanner
+        if not S then
+            return
+        end
+        if S.IsMenuOpen() then
+            S.Schedule(0.18)
+        else
+            S.Generation += 1
+        end
+    end
+)
+Connect(
+    CoreGui.DescendantAdded,
+    function(Object)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() and not S.IsOurObject(Object) then
+            S.Schedule(0.18)
+        end
+    end
+)
+Connect(
+    CoreGui.DescendantRemoving,
+    function(Object)
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() and not S.IsOurObject(Object) then
+            S.Schedule(0.18)
+        end
+    end
+)
+task.spawn(function()
+    while Gui and Gui.Parent do
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() then
+            S.Schedule(0)
+        end
+        task.wait(0.65)
+    end
+end)
+Connect(
+    Players.PlayerAdded,
+    function()
+        local S = Env.WuzzCoreScanner
+        if S and S.IsMenuOpen() then
+            S.Schedule(0.15)
+        end
+    end
+)
+Connect(
+    Players.PlayerRemoving,
+    function(Player)
+        local S = Env.WuzzCoreScanner
+        if S then
+            S.Saved[Player.UserId] = nil
+            for Index = #S.SavedOrder,1,-1 do
+                local CachedPlayer = S.SavedOrder[Index]
+                if CachedPlayer == Player
+                or (CachedPlayer and CachedPlayer.UserId == Player.UserId) then
+                    table.remove(S.SavedOrder,Index)
+                end
+            end
+        end
+        RemoveRow(Player.UserId)
+        for Index = #FetchedListPlayers,1,-1 do
+            local CachedPlayer = FetchedListPlayers[Index]
+            if CachedPlayer == Player
+            or (CachedPlayer and CachedPlayer.UserId == Player.UserId) then
+                table.remove(FetchedListPlayers,Index)
+            end
+        end
+        RebuildBasePlayerMaps()
+        SelectedTradePlayersUntil[Player.UserId] = nil
+        if Env.WuzzBasePreviewPlayer == Player then
+            Env.WuzzBasePreviewPlayer = nil
+            if BaseViewerFrame and BaseViewerFrame.Parent then
+                BaseViewerFrame.Visible = false
+            end
+        end
+        if LastTradedPlayer == Player then
+            LastTradedPlayer = nil
+        end
+        if SelectedTradePlayer == Player then
+            SelectedTradePlayer = nil
+            ClearSelectedBaseESP()
+        end
+        ScanPlotBaseESPs()
+        RefreshSelectedBaseESP()
+        if S and S.IsMenuOpen() then
+            S.Schedule(0.15)
+        end
+    end
+)
+Connect(
+    Close.MouseButton1Click,
+    Cleanup
+)
+Connect(
+    Close.MouseEnter,
+    function()
+        TweenService:Create(
+            Close,
+            TweenInfo.new(0.12),
+            {
+                BackgroundColor3 =
+                    Color3.fromRGB(
+                        73,
+                        30,
+                        95
+                    )
+            }
+        ):Play()
+    end
+)
+Connect(
+    Close.MouseLeave,
+    function()
+        TweenService:Create(
+            Close,
+            TweenInfo.new(0.12),
+            {
+                BackgroundColor3 =
+                    Color3.fromRGB(
+                        46,
+                        24,
+                        66
+                    )
+            }
+        ):Play()
+    end
+)
+task.spawn(function()
+    while Gui and Gui.Parent do
+        StrokeGradient.Rotation =
+            (
+                StrokeGradient.Rotation
+                + 3
+            ) % 360
+        task.wait(0.08)
+    end
+end)
+task.defer(function()
+    local S = Env.WuzzCoreScanner
+    if S and S.IsMenuOpen() then
+        S.Schedule(0.18)
+    end
+end)
